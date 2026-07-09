@@ -1761,7 +1761,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 - Consumes: `AgentExecutor`, `ExecutorRunOpts`, `ExecutorHooks` (Task 4)
 - Produces: `class SdkExecutor implements AgentExecutor`、`toPermissionResult(response: PendingInputResponse, originalInput: Record<string, unknown>): PermissionResult`
 
-> **注意**: このタスクのコードは実装時に `node_modules/@anthropic-ai/claude-agent-sdk/sdk.d.ts`（型定義）と公式ドキュメント https://code.claude.com/docs/en/agent-sdk/typescript を必ず突き合わせること。以下は設計時点の調査に基づくが、SDK は更新が速い。
+> **注意**: 以下のコードは 2026-07-09 時点の公式ドキュメント（https://code.claude.com/docs/en/agent-sdk/typescript / .../user-input / .../sessions）のシグネチャと突き合わせ済み（`PermissionResult` の allow は `updatedInput` 必須、AskUserQuestion の回答は質問文キーの Record、キャンセルは Query の `interrupt()`/`close()`、`resume: string`、result メッセージに `session_id` 必須、パッケージは 0.3.x）。SDK は更新が速いため、実装時にも `node_modules/@anthropic-ai/claude-agent-sdk/sdk.d.ts` で最終確認すること。特に esbuild は **`--external:@anthropic-ai/claude-agent-sdk` が必須**（SDK は optional dependency のプラットフォーム別バイナリを node_modules から解決して spawn する）。
 
 - [ ] **Step 1: SDK を導入**
 
@@ -1791,17 +1791,24 @@ describe("toPermissionResult", () => {
     ).toEqual({ behavior: "deny", message: "使わないで" });
   });
 
-  it("maps question answers into updatedInput", () => {
+  it("maps question answers into updatedInput (official Record shape)", () => {
     const original = {
-      questions: [{ question: "どっち?", header: "選択", options: [], multiSelect: false }],
+      questions: [
+        { question: "どっち?", header: "選択", options: [], multiSelect: false },
+        { question: "範囲は?", header: "範囲", options: [], multiSelect: true },
+      ],
     };
     const result = toPermissionResult(
-      { kind: "answers", answers: [["案A"]] },
+      { kind: "answers", answers: [["案A"], ["UI", "API"]] },
       original,
     );
-    expect(result.behavior).toBe("allow");
-    // answers は SDK の期待する形で updatedInput に埋め込まれる
-    // (実装時に sdk.d.ts の AskUserQuestion 応答形式と一致させること)
+    expect(result).toEqual({
+      behavior: "allow",
+      updatedInput: {
+        questions: original.questions,
+        answers: { "どっち?": "案A", "範囲は?": "UI, API" },
+      },
+    });
   });
 });
 ```
@@ -1856,20 +1863,19 @@ export function toPermissionResult(
     return { behavior: "deny", message: response.message };
   }
   if (response.kind === "answers") {
-    // AskUserQuestion: 選択された回答を input に反映して allow する。
-    // 実装時に sdk.d.ts / 公式 user-input ドキュメントの形式と一致させること。
+    // AskUserQuestion の公式応答形式 (user-input docs "Handle clarifying questions"):
+    //   { questions: <原文そのまま>, answers: { "<質問文>": "<選択ラベル>" } }
+    // multiSelect は ", " 区切りの文字列にする
     const questions = (originalInput.questions ?? []) as Array<{
       question: string;
     }>;
+    const answers: Record<string, string> = {};
+    questions.forEach((q, i) => {
+      answers[q.question] = (response.answers[i] ?? []).join(", ");
+    });
     return {
       behavior: "allow",
-      updatedInput: {
-        ...originalInput,
-        answers: questions.map((q, i) => ({
-          question: q.question,
-          selected: response.answers[i] ?? [],
-        })),
-      },
+      updatedInput: { questions: originalInput.questions, answers },
     };
   }
   return { behavior: "allow", updatedInput: originalInput };
@@ -1903,7 +1909,6 @@ export class SdkExecutor implements AgentExecutor {
           permissionMode: "acceptEdits",
           allowedTools: ALLOWED_TOOLS,
           resume: opts.resumeSessionId ?? undefined,
-          abortController: signalToController(opts.signal),
           canUseTool: async (toolName, input) => {
             const response = await hooks.requestInput({
               id: "", // workflow 側で採番される
@@ -1912,27 +1917,39 @@ export class SdkExecutor implements AgentExecutor {
               input,
               createdAt: "",
             });
-            return toPermissionResult(
-              response,
-              input as Record<string, unknown>,
-            );
+            return toPermissionResult(response, input);
           },
         },
       });
 
-      for await (const message of stream) {
-        if (message.type === "system" && message.subtype === "init") {
-          hooks.onSessionId(message.session_id);
+      // ジョブキャンセル: 実行中ターンを中断して子プロセスを畳む
+      // (Query は AsyncGenerator + interrupt()/close() を持つ)
+      const onAbort = () => {
+        void stream.interrupt().catch(() => {});
+        stream.close();
+      };
+      if (opts.signal.aborted) onAbort();
+      else opts.signal.addEventListener("abort", onAbort, { once: true });
+
+      try {
+        for await (const message of stream) {
+          if (message.type === "system" && message.subtype === "init") {
+            hooks.onSessionId(message.session_id);
+          }
+          const activity = extractAssistantText(message);
+          if (activity) hooks.onActivity(activity);
+          if (message.type === "result") {
+            // result には session_id が必ず入る (init を取り逃しても確実に保存)
+            hooks.onSessionId(message.session_id);
+            return message.subtype === "success"
+              ? { ok: true }
+              : { ok: false, error: `agent finished with ${message.subtype}` };
+          }
         }
-        const activity = extractAssistantText(message);
-        if (activity) hooks.onActivity(activity);
-        if (message.type === "result") {
-          return message.subtype === "success"
-            ? { ok: true }
-            : { ok: false, error: `agent finished with ${message.subtype}` };
-        }
+        return { ok: false, error: "stream ended without result message" };
+      } finally {
+        opts.signal.removeEventListener("abort", onAbort);
       }
-      return { ok: false, error: "stream ended without result message" };
     } catch (err) {
       return {
         ok: false,
@@ -1940,13 +1957,6 @@ export class SdkExecutor implements AgentExecutor {
       };
     }
   }
-}
-
-function signalToController(signal: AbortSignal): AbortController {
-  const controller = new AbortController();
-  if (signal.aborted) controller.abort();
-  else signal.addEventListener("abort", () => controller.abort(), { once: true });
-  return controller;
 }
 ```
 
