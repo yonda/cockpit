@@ -1,0 +1,113 @@
+#!/usr/bin/env python3
+"""icalBuddy で今日の予定を取得して JSON に書き出す。
+
+launchd (com.cockpit.calendar) から 5 分毎に実行される想定。
+cockpit は ~/.cache/cockpit/calendar-today.json を読むだけなので、
+Next.js プロセス内で child_process を使わずに済む (Turbopack 制約)。
+
+システム python3 + 標準ライブラリのみで動くこと (launchd の PATH は最小)。
+"""
+
+import hashlib
+import json
+import os
+import re
+import subprocess
+import sys
+import tempfile
+from datetime import datetime
+
+ICALBUDDY = "/opt/homebrew/bin/icalBuddy"
+CACHE_DIR = os.path.expanduser("~/.cache/cockpit")
+CACHE_FILE = os.path.join(CACHE_DIR, "calendar-today.json")
+
+EVENT_SEP = "@@E@@"
+FIELD_SEP = "@@F@@"
+TIME_RE = re.compile(r"\b(\d{2}):(\d{2})\b")
+MEET_RE = re.compile(r"https://meet\.google\.com/[a-z0-9-]+")
+ZOOM_RE = re.compile(r"https://[a-z0-9.]*zoom\.us/j/[^\s\"'<>]+")
+
+
+def run_icalbuddy() -> str:
+    cmd = [
+        ICALBUDDY if os.path.exists(ICALBUDDY) else "icalBuddy",
+        "-npn", "-nc", "--noRelativeDates",
+        "-b", EVENT_SEP,
+        "-ps", f"|{FIELD_SEP}|",
+        "-iep", "datetime,title,location,notes,url",
+        "-po", "datetime,title,location,notes,url",
+        "-df", "%Y-%m-%d",
+        "-tf", "%H:%M",
+        "eventsToday",
+    ]
+    return subprocess.run(
+        cmd, capture_output=True, text=True, timeout=30, check=True
+    ).stdout
+
+
+def iso_today(hh: int, mm: int) -> str:
+    now = datetime.now().astimezone()
+    return now.replace(hour=hh, minute=mm, second=0, microsecond=0).isoformat()
+
+
+def parse_events(raw: str) -> list[dict]:
+    events = []
+    for chunk in raw.split(EVENT_SEP):
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        fields = chunk.split(FIELD_SEP)
+        if len(fields) < 2:
+            continue
+        dt_field, title = fields[0].strip(), fields[1].strip()
+
+        times = TIME_RE.findall(dt_field)
+        if times:
+            start = iso_today(int(times[0][0]), int(times[0][1]))
+            end = iso_today(int(times[-1][0]), int(times[-1][1]))
+            all_day = False
+        else:
+            start = iso_today(0, 0)
+            end = iso_today(23, 59)
+            all_day = True
+
+        meet = MEET_RE.search(chunk) or ZOOM_RE.search(chunk)
+        events.append({
+            "id": hashlib.md5(f"{title}|{start}".encode()).hexdigest()[:12],
+            "title": title,
+            "start": start,
+            "end": end,
+            "allDay": all_day,
+            "meetUrl": meet.group(0) if meet else None,
+            "location": None,
+            "declined": False,
+        })
+    return events
+
+
+def main() -> int:
+    try:
+        raw = run_icalbuddy()
+    except subprocess.CalledProcessError as e:
+        print(f"icalBuddy failed: {e.stderr[:300]}", file=sys.stderr)
+        return 1
+    except FileNotFoundError:
+        print("icalBuddy not found", file=sys.stderr)
+        return 1
+
+    payload = {
+        "events": parse_events(raw),
+        "fetchedAt": datetime.now().astimezone().isoformat(),
+    }
+
+    os.makedirs(CACHE_DIR, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=CACHE_DIR, suffix=".tmp")
+    with os.fdopen(fd, "w") as f:
+        json.dump(payload, f, ensure_ascii=False, indent=1)
+    os.replace(tmp, CACHE_FILE)
+    print(f"wrote {len(payload['events'])} events to {CACHE_FILE}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

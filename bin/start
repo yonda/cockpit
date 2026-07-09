@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+# launchd から起動する場合 PATH がほぼ空なので明示的に補正する
+export PATH="/opt/homebrew/bin:$HOME/.local/share/mise/shims:$HOME/.local/bin:$PATH"
+
+command -v gh >/dev/null || { echo "gh CLI not found in PATH: $PATH" >&2; exit 1; }
+command -v pnpm >/dev/null || { echo "pnpm CLI not found in PATH: $PATH" >&2; exit 1; }
+
+if [[ ! -f .env.local ]]; then
+  echo ".env.local が無いです。cp .env.local.example .env.local して GITHUB_ORG を書いてください" >&2
+  exit 1
+fi
+
+# .env.local を環境変数として読み込む
+set -a
+# shellcheck disable=SC1091
+source .env.local
+set +a
+
+# gh の macOS Keychain から取得。gh auth status のチェックは exit code だけ利用
+if ! gh auth status >/dev/null 2>&1; then
+  echo "gh auth login を先に実行してください" >&2
+  exit 1
+fi
+export GITHUB_TOKEN="$(gh auth token)"
+
+if [[ ! -d .next ]]; then
+  echo ".next/ が無いので pnpm build を実行します" >&2
+  pnpm build
+fi
+
+exec pnpm exec next start --port "${PORT:-3000}"

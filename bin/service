@@ -1,0 +1,118 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+LABEL="com.cockpit.app"
+CAL_LABEL="com.cockpit.calendar"
+PLIST_TEMPLATE="services/cockpit.plist.template"
+CAL_PLIST_TEMPLATE="services/cockpit-calendar.plist.template"
+PLIST_DEST="$HOME/Library/LaunchAgents/${LABEL}.plist"
+CAL_PLIST_DEST="$HOME/Library/LaunchAgents/${CAL_LABEL}.plist"
+PROJECT_DIR="$(pwd -P)"
+DOMAIN_TARGET="gui/$(id -u)"
+
+usage() {
+  cat <<EOF
+Usage: bin/service <command>
+
+Commands:
+  install             plist を生成して ~/Library/LaunchAgents/ に置き、launchd に登録する
+  uninstall           launchd から外し、plist ファイルを削除する
+  restart             プロセスを再起動する（build 更新後などに使用）
+  status              launchd の登録状態を表示
+  logs                out ログを tail -f
+  errlogs             err ログを tail -f
+  calendar-install    calendar-sync エージェントを launchd に登録する
+  calendar-uninstall  calendar-sync エージェントを launchd から外す
+  calendar-status     calendar-sync エージェントの登録状態を表示
+
+Label: ${LABEL} / ${CAL_LABEL}
+Plist: ${PLIST_DEST}
+EOF
+}
+
+render_plist() {
+  local template="$1" label="$2"
+  sed \
+    -e "s|__LABEL__|${label}|g" \
+    -e "s|__PROJECT_DIR__|${PROJECT_DIR}|g" \
+    -e "s|__HOME__|${HOME}|g" \
+    "${template}"
+}
+
+install_agent() {
+  local template="$1" label="$2" dest="$3"
+  [[ -f "${template}" ]] || { echo "template が見つかりません: ${template}" >&2; exit 1; }
+  mkdir -p "$HOME/Library/LaunchAgents"
+  render_plist "${template}" "${label}" > "${dest}"
+  echo "wrote ${dest}"
+
+  if launchctl print "${DOMAIN_TARGET}/${label}" >/dev/null 2>&1; then
+    echo "既に登録済みなので一度外します"
+    launchctl bootout "${DOMAIN_TARGET}/${label}" || true
+  fi
+
+  launchctl bootstrap "${DOMAIN_TARGET}" "${dest}"
+}
+
+uninstall_agent() {
+  local label="$1" dest="$2"
+  if launchctl print "${DOMAIN_TARGET}/${label}" >/dev/null 2>&1; then
+    launchctl bootout "${DOMAIN_TARGET}/${label}"
+    echo "launchd から外しました"
+  else
+    echo "登録されていません"
+  fi
+  if [[ -f "${dest}" ]]; then
+    rm -f "${dest}"
+    echo "removed ${dest}"
+  fi
+}
+
+status_agent() {
+  local label="$1"
+  if launchctl print "${DOMAIN_TARGET}/${label}" >/dev/null 2>&1; then
+    launchctl print "${DOMAIN_TARGET}/${label}" | grep -E "state|program|last exit|pid" | sed 's/^\s*//'
+  else
+    echo "not loaded"
+  fi
+}
+
+cmd_install() {
+  mkdir -p "$HOME/Library/Logs"
+  install_agent "${PLIST_TEMPLATE}" "${LABEL}" "${PLIST_DEST}"
+  echo "launchd に登録しました。 http://localhost:${PORT:-3000}"
+}
+
+cmd_restart() {
+  launchctl kickstart -k "${DOMAIN_TARGET}/${LABEL}"
+  echo "restarted"
+}
+
+cmd_logs() {
+  local path="$HOME/Library/Logs/cockpit.out.log"
+  [[ -f "$path" ]] || { echo "no log yet: $path"; exit 0; }
+  tail -f "$path"
+}
+
+cmd_errlogs() {
+  local path="$HOME/Library/Logs/cockpit.err.log"
+  [[ -f "$path" ]] || { echo "no err log yet: $path"; exit 0; }
+  tail -f "$path"
+}
+
+case "${1:-}" in
+  install)            cmd_install ;;
+  uninstall)          uninstall_agent "${LABEL}" "${PLIST_DEST}" ;;
+  restart)            cmd_restart ;;
+  status)             status_agent "${LABEL}" ;;
+  logs)               cmd_logs ;;
+  errlogs)            cmd_errlogs ;;
+  calendar-install)   install_agent "${CAL_PLIST_TEMPLATE}" "${CAL_LABEL}" "${CAL_PLIST_DEST}"
+                      echo "calendar-sync を launchd に登録しました" ;;
+  calendar-uninstall) uninstall_agent "${CAL_LABEL}" "${CAL_PLIST_DEST}" ;;
+  calendar-status)    status_agent "${CAL_LABEL}" ;;
+  ""|help|-h|--help)  usage ;;
+  *) echo "unknown command: $1" >&2; usage; exit 1 ;;
+esac

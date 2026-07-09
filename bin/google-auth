@@ -1,0 +1,101 @@
+#!/usr/bin/env node
+// Google Calendar OAuth の初回セットアップスクリプト。
+//
+// 前提 (Google Cloud Console での準備):
+//   1. プロジェクトを作成 (既存でも可) https://console.cloud.google.com/
+//   2. 「APIとサービス > ライブラリ」で Google Calendar API を有効化
+//   3. 「APIとサービス > OAuth同意画面」を設定
+//      - Workspace アカウントなら User Type: 内部 (Internal) が最も簡単
+//      - 個人 Gmail なら External + 公開ステータスを「本番環境」に
+//        (テストモードのままだと refresh token が 7 日で失効する)
+//   4. 「認証情報 > 認証情報を作成 > OAuthクライアントID」で
+//      アプリケーションの種類: 「デスクトップアプリ」 を作成
+//
+// 使い方:
+//   bin/google-auth <client_id> <client_secret>
+//   → ブラウザで同意 → .env.local に自動追記
+
+import { createServer } from "node:http";
+import { appendFileSync, readFileSync, existsSync } from "node:fs";
+import { execFile } from "node:child_process";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
+
+const [clientId, clientSecret] = process.argv.slice(2);
+if (!clientId || !clientSecret) {
+  console.error("使い方: bin/google-auth <client_id> <client_secret>");
+  process.exit(1);
+}
+
+const PORT = 8765;
+const REDIRECT_URI = `http://localhost:${PORT}/callback`;
+const SCOPE = "https://www.googleapis.com/auth/calendar.readonly";
+
+const authUrl = new URL("https://accounts.google.com/o/oauth2/v2/auth");
+authUrl.searchParams.set("client_id", clientId);
+authUrl.searchParams.set("redirect_uri", REDIRECT_URI);
+authUrl.searchParams.set("response_type", "code");
+authUrl.searchParams.set("scope", SCOPE);
+authUrl.searchParams.set("access_type", "offline");
+authUrl.searchParams.set("prompt", "consent");
+
+const server = createServer(async (req, res) => {
+  const url = new URL(req.url, `http://localhost:${PORT}`);
+  if (url.pathname !== "/callback") {
+    res.writeHead(404).end();
+    return;
+  }
+  const code = url.searchParams.get("code");
+  if (!code) {
+    res.writeHead(400).end("no code");
+    return;
+  }
+
+  const tokenRes = await fetch("https://oauth2.googleapis.com/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      code,
+      client_id: clientId,
+      client_secret: clientSecret,
+      redirect_uri: REDIRECT_URI,
+      grant_type: "authorization_code",
+    }),
+  });
+  const data = await tokenRes.json();
+
+  if (!data.refresh_token) {
+    res.writeHead(500, { "Content-Type": "text/plain; charset=utf-8" });
+    res.end("refresh_token が返ってきませんでした。ターミナルを確認してください。");
+    console.error("エラー: refresh_token なし。レスポンス:", JSON.stringify(data, null, 2));
+    process.exit(1);
+  }
+
+  const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
+  const envPath = join(repoRoot, ".env.local");
+  const existing = existsSync(envPath) ? readFileSync(envPath, "utf8") : "";
+  if (existing.includes("GOOGLE_REFRESH_TOKEN")) {
+    console.log("\n.env.local に既に GOOGLE_REFRESH_TOKEN があります。手動で更新してください:");
+    console.log(`GOOGLE_CLIENT_ID=${clientId}`);
+    console.log(`GOOGLE_CLIENT_SECRET=${clientSecret}`);
+    console.log(`GOOGLE_REFRESH_TOKEN=${data.refresh_token}`);
+  } else {
+    appendFileSync(
+      envPath,
+      `\n# Google Calendar (bin/google-auth で生成)\nGOOGLE_CLIENT_ID=${clientId}\nGOOGLE_CLIENT_SECRET=${clientSecret}\nGOOGLE_REFRESH_TOKEN=${data.refresh_token}\n`,
+    );
+    console.log(`\n.env.local に認証情報を追記しました。`);
+  }
+
+  res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
+  res.end("認証完了！このタブは閉じて OK です。");
+  console.log("完了。サービスを再起動すると Board に予定が表示されます。");
+  setTimeout(() => process.exit(0), 100);
+});
+
+server.listen(PORT, () => {
+  console.log("ブラウザで以下の URL を開いて同意してください:\n");
+  console.log(authUrl.toString());
+  console.log("\n(callback を localhost で待ち受け中...)");
+  execFile("open", [authUrl.toString()], () => {});
+});
