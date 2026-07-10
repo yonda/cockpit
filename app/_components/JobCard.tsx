@@ -64,6 +64,89 @@ type QuestionInput = {
   }>;
 };
 
+type Question = NonNullable<QuestionInput["questions"]>[number];
+
+function QuestionPanel({
+  questions,
+  busy,
+  error,
+  respond,
+}: {
+  questions: Question[];
+  busy: boolean;
+  error: string | null;
+  respond: (response: unknown) => void;
+}) {
+  const [selections, setSelections] = useState<string[][]>(() =>
+    questions.map(() => []),
+  );
+
+  const toggle = (qIndex: number, label: string, multiSelect: boolean) => {
+    setSelections((prev) =>
+      prev.map((selected, i) => {
+        if (i !== qIndex) return selected;
+        if (!multiSelect) {
+          return selected.includes(label) ? [] : [label];
+        }
+        return selected.includes(label)
+          ? selected.filter((l) => l !== label)
+          : [...selected, label];
+      }),
+    );
+  };
+
+  const allAnswered =
+    questions.length > 0 && selections.every((s) => s.length > 0);
+
+  return (
+    <div className="flex flex-col gap-3 border border-[var(--signal-alert)]/40 bg-[var(--signal-alert)]/5 p-3">
+      {questions.map((q, qIndex) => (
+        <div key={`${qIndex}-${q.question}`} className="flex flex-col gap-2">
+          <div className="text-[13px] font-semibold text-[var(--ink)]">
+            {q.question}
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {(q.options ?? []).map((option) => {
+              const selected = selections[qIndex]?.includes(option.label);
+              return (
+                <button
+                  key={option.label}
+                  type="button"
+                  disabled={busy}
+                  title={option.description}
+                  onClick={() => toggle(qIndex, option.label, q.multiSelect ?? false)}
+                  className={`border px-2.5 py-1 font-mono text-[12px] transition ${
+                    selected
+                      ? "border-[var(--accent)] bg-[var(--accent)]/10 text-[var(--accent)]"
+                      : "border-[var(--hairline-strong)] text-[var(--ink)] hover:border-[var(--accent)] hover:text-[var(--accent)]"
+                  }`}
+                >
+                  {option.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      ))}
+      <div>
+        <button
+          type="button"
+          disabled={busy || !allAnswered}
+          onClick={() => respond({ kind: "answers", answers: selections })}
+          className="border border-[var(--accent)]/60 px-2.5 py-1 font-mono text-[12px] text-[var(--accent)] transition hover:bg-[var(--accent)]/10 disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          回答を送信
+        </button>
+      </div>
+      {error ? (
+        <div className="font-mono text-[11px] text-[var(--signal-alert)]">
+          {error}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function PendingInputPanel({ job }: { job: Job }) {
   const pending = job.pendingInput!;
   const [busy, setBusy] = useState(false);
@@ -91,34 +174,7 @@ function PendingInputPanel({ job }: { job: Job }) {
 
   if (pending.kind === "question") {
     const questions = (pending.input as QuestionInput).questions ?? [];
-    // MVP: 最初の質問の選択肢をボタンで出す (単一質問が実際のほぼ全ケース)
-    const q = questions[0];
-    return (
-      <div className="flex flex-col gap-2 border border-[var(--signal-alert)]/40 bg-[var(--signal-alert)]/5 p-3">
-        <div className="text-[13px] font-semibold text-[var(--ink)]">
-          {q?.question ?? "エージェントからの質問"}
-        </div>
-        <div className="flex flex-wrap gap-2">
-          {(q?.options ?? []).map((option) => (
-            <button
-              key={option.label}
-              type="button"
-              disabled={busy}
-              title={option.description}
-              onClick={() => respond({ kind: "answers", answers: [[option.label]] })}
-              className="border border-[var(--hairline-strong)] px-2.5 py-1 font-mono text-[12px] text-[var(--ink)] transition hover:border-[var(--accent)] hover:text-[var(--accent)]"
-            >
-              {option.label}
-            </button>
-          ))}
-        </div>
-        {error ? (
-          <div className="font-mono text-[11px] text-[var(--signal-alert)]">
-            {error}
-          </div>
-        ) : null}
-      </div>
-    );
+    return <QuestionPanel questions={questions} busy={busy} error={error} respond={respond} />;
   }
 
   return (

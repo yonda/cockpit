@@ -69,8 +69,12 @@ async function ensureWorktree(
   const existing = await list();
   if (existing) return existing; // 再発射・リトライは既存 worktree を再利用
 
-  // git wt は未存在なら origin ベースで作成する (グローバル運用規約のツール)
-  await deps.commands.run("git", ["wt", branch], { cwd: deps.repoDir });
+  // git wt は未存在なら origin ベースで作成する (グローバル運用規約のツール)。
+  // 起点を明示的に origin/main にする: ローカル main は worktree 運用では
+  // 更新されない前提のため、直前の `git fetch origin main` を意味あるものにする。
+  await deps.commands.run("git", ["wt", branch, "origin/main"], {
+    cwd: deps.repoDir,
+  });
   const created = await list();
   if (!created) throw new Error(`worktree not found after git wt ${branch}`);
   return created;
@@ -154,7 +158,13 @@ export async function runIssueJob(
     if (signal.aborted) return; // cancel 側が状態遷移を行う
 
     if (!result.ok) {
-      deps.store.transition(jobId, "failed", { error: result.error });
+      // executor が requestInput を投げっぱなしのまま終了した場合に備え、
+      // broker に残った entry を掃除してから失敗遷移する (漏れ防止)
+      deps.broker.abort(jobId);
+      deps.store.transition(jobId, "failed", {
+        error: result.error,
+        pendingInput: null,
+      });
       return;
     }
 
@@ -186,6 +196,8 @@ export async function runIssueJob(
     const message = err instanceof Error ? err.message : String(err);
     const current = deps.store.get(jobId);
     if (current && ["running", "waiting_input"].includes(current.status)) {
+      // ここでも同様に broker の残留 entry を掃除してから失敗遷移する
+      deps.broker.abort(jobId);
       deps.store.transition(jobId, "failed", { error: message, pendingInput: null });
     }
   }

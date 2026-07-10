@@ -1,11 +1,11 @@
 import { existsSync, mkdirSync, unlinkSync } from "node:fs";
 import { createServer, type Server, type Socket } from "node:net";
 import { dirname } from "node:path";
-import type {
-  Job,
-  PendingInputResponse,
-  RunnerRequest,
-  RunnerResponse,
+import {
+  isPendingInputResponse,
+  type Job,
+  type RunnerRequest,
+  type RunnerResponse,
 } from "../lib/jobs/types";
 import type { InputBroker } from "./input-broker";
 import type { Scheduler } from "./scheduler";
@@ -107,8 +107,15 @@ function handleLine(
         const { jobId, inputId, response } = request.params as {
           jobId: string;
           inputId: string;
-          response: PendingInputResponse;
+          response: unknown;
         };
+        if (!isPendingInputResponse(response)) {
+          respond(socket, {
+            id: request.id,
+            error: { message: "invalid response shape" },
+          });
+          return;
+        }
         const ok = deps.broker.resolve(jobId, inputId, response);
         if (!ok) {
           respond(socket, {

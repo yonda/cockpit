@@ -135,7 +135,9 @@ describe("runIssueJob", () => {
     expect(final.prUrl).toBe("https://github.com/yonda/cockpit/pull/9");
     expect(final.worktreePath).toBe("/tmp/cockpit-wt/feature/1-test-issue");
     expect(deps.commands.calls).toContain("git fetch origin main");
-    expect(deps.commands.calls).toContain("git wt feature/1-test-issue");
+    expect(deps.commands.calls).toContain(
+      "git wt feature/1-test-issue origin/main",
+    );
   });
 
   it("transitions to waiting_input and resumes on respond", async () => {
@@ -224,6 +226,35 @@ describe("runIssueJob", () => {
     expect(final.status).toBe("failed");
     expect(final.error).toBe("sdk crashed");
     expect(final.pendingInput).toBeNull();
+  });
+
+  it("cleans up the broker when the executor returns ok:false after a dangling requestInput", async () => {
+    const deps = makeDeps();
+    deps.executor.run = async (_opts, hooks) => {
+      // fire-and-forget: 呼び出し元は await せずに終了することがある
+      void hooks.requestInput({
+        id: "in-1",
+        kind: "permission",
+        toolName: "Bash",
+        input: {},
+        createdAt: new Date().toISOString(),
+      });
+      return { ok: false, error: "boom" };
+    };
+    const job = store.create({
+      repo: "yonda/cockpit",
+      issueNumber: 1,
+      issueTitle: "test issue",
+      branch: "feature/1-test-issue",
+    });
+
+    await runIssueJob(deps, job.id, new AbortController().signal);
+
+    const final = store.get(job.id)!;
+    expect(final.status).toBe("failed");
+    expect(final.pendingInput).toBeNull();
+    // broker の entry も掃除されていること (漏れた entry には resolve が届かない)
+    expect(deps.broker.resolve(job.id, "in-1", { kind: "allow" })).toBe(false);
   });
 
   it("cancel during waiting_input resolves and leaves the job cancelled", async () => {

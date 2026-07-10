@@ -127,4 +127,22 @@ describe("runner socket protocol", () => {
     });
     await expect(pending).resolves.toEqual({ kind: "allow" });
   });
+
+  it("rejects job.respond with an invalid response shape", async () => {
+    const { callRunner } = await client();
+    const job = store.create({
+      repo: "yonda/cockpit",
+      issueNumber: 10,
+      issueTitle: "invalid respond test",
+      branch: "feature/10-invalid-respond-test",
+    });
+
+    await expect(
+      callRunner("job.respond", {
+        jobId: job.id,
+        inputId: "in-1",
+        response: {},
+      }),
+    ).rejects.toThrow(/invalid response shape/);
+  });
 });

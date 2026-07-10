@@ -1,5 +1,3 @@
-import { homedir } from "node:os";
-import { join } from "node:path";
 import { JOBS_DIR, RUNNER_SOCKET_PATH } from "../lib/jobs/types";
 import { RealCommandRunner } from "./exec";
 import { InputBroker } from "./input-broker";

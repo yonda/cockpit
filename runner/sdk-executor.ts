@@ -13,14 +13,20 @@ import type {
 
 // 定型ワークフローに必要なツールは事前許可。ここに無い Bash・外部送信系と
 // AskUserQuestion が canUseTool に落ちて cockpit へ転送される。
+//
+// Edit/Write は意図的に含めない: allowedTools の許可はパス無制限で、
+// permissionMode: "acceptEdits" が持つ cwd (worktree) スコープを上書きしてしまう。
+// そのため許可すると worktree 外への書き込みが無警告で行える。
+// ここから外しておけば worktree 内の編集は acceptEdits が引き続き自動承認し、
+// worktree 外への書き込みは canUseTool 経由で cockpit に転送される。
 const ALLOWED_TOOLS = [
   "Read",
   "Glob",
   "Grep",
-  "Edit",
-  "Write",
   "TodoWrite",
   "Task",
+  // git push を含む (draft PR 作成に必要)。push 等の外部副作用は draft PR 経由でレビューする
+  // トレードオフを受け入れている。
   "Bash(git:*)",
   "Bash(gh issue view:*)",
   "Bash(gh pr create --draft:*)",
