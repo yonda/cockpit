@@ -99,4 +99,60 @@ describe("Scheduler", () => {
     expect(runJob).toHaveBeenCalledTimes(1);
     expect(reloaded.get(j2.id)!.status).toBe("failed");
   });
+
+  it("resumeOnBoot respects maxConcurrent and drains the rest as slots free", async () => {
+    const resolvers: Array<() => void> = [];
+    const runJob = vi.fn(
+      () => new Promise<void>((resolve) => resolvers.push(resolve)),
+    );
+    for (const n of [1, 2, 3]) {
+      const j = store.create(fields(n));
+      store.transition(j.id, "running", {
+        sessionId: `sess-${n}`,
+        worktreePath: `/tmp/wt-${n}`,
+      });
+    }
+    const reloaded = new JobStore(dir);
+    reloaded.loadAll();
+    const scheduler = new Scheduler(
+      { ...makeDeps(), store: reloaded },
+      { maxConcurrent: 2, runJob },
+    );
+    scheduler.resumeOnBoot();
+    expect(runJob).toHaveBeenCalledTimes(2);
+    resolvers[0]();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(runJob).toHaveBeenCalledTimes(3);
+  });
+
+  it("resumeOnBoot clears pendingInput before re-running a waiting_input job", () => {
+    const j = store.create(fields(1));
+    store.transition(j.id, "running", { sessionId: "s", worktreePath: "/tmp/wt" });
+    store.transition(j.id, "waiting_input", {
+      pendingInput: {
+        id: "in-1",
+        kind: "permission",
+        toolName: "Bash",
+        input: {},
+        createdAt: new Date().toISOString(),
+      },
+    });
+    const reloaded = new JobStore(dir);
+    reloaded.loadAll();
+    const runJob = vi.fn(() => new Promise<void>(() => {}));
+    const scheduler = new Scheduler(
+      { ...makeDeps(), store: reloaded },
+      { runJob },
+    );
+    scheduler.resumeOnBoot();
+    expect(runJob).toHaveBeenCalledTimes(1);
+    expect(reloaded.get(j.id)!.pendingInput).toBeNull();
+  });
+
+  it("cancel marks a queued job cancelled before it starts", () => {
+    const scheduler = new Scheduler(makeDeps(), { runJob: vi.fn() });
+    const job = store.create(fields(1));
+    scheduler.cancel(job.id);
+    expect(store.get(job.id)!.status).toBe("cancelled");
+  });
 });

@@ -2,6 +2,7 @@ import { runIssueJob, type WorkflowDeps } from "./workflow";
 
 export class Scheduler {
   private active = new Map<string, AbortController>();
+  private pendingResume: string[] = [];
   private readonly maxConcurrent: number;
   private readonly runJob: typeof runIssueJob;
 
@@ -13,8 +14,18 @@ export class Scheduler {
     this.runJob = opts.runJob ?? runIssueJob;
   }
 
-  /** 空きスロットがあれば古い順に queued ジョブを開始する */
+  /** 空きスロットがあれば resume 待ち → queued の順に開始する */
   poke(): void {
+    while (
+      this.active.size < this.maxConcurrent &&
+      this.pendingResume.length > 0
+    ) {
+      const id = this.pendingResume.shift()!;
+      const job = this.deps.store.get(id);
+      // resume 待ちの間にキャンセル等で状態が変わったものは飛ばす
+      if (!job || !["running", "waiting_input"].includes(job.status)) continue;
+      this.start(id);
+    }
     if (this.active.size >= this.maxConcurrent) return;
     const queued = this.deps.store
       .list()
@@ -54,13 +65,14 @@ export class Scheduler {
    * 残っているジョブを、session があれば resume 再実行、なければ failed にする。
    */
   resumeOnBoot(): void {
-    for (const job of this.deps.store.list()) {
-      if (!["running", "waiting_input"].includes(job.status)) continue;
+    const interrupted = this.deps.store
+      .list()
+      .filter((j) => ["running", "waiting_input"].includes(j.status))
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+    for (const job of interrupted) {
       if (job.sessionId && job.worktreePath) {
-        // runIssueJob は running 遷移から始まるので一度 queued 相当に見せる
-        // (waiting_input -> running は合法遷移なのでそのまま start してよい)
         this.deps.store.update(job.id, { pendingInput: null });
-        this.start(job.id);
+        this.pendingResume.push(job.id);
       } else {
         this.deps.store.transition(job.id, "failed", {
           error: "runner 再起動時に復旧できませんでした (session なし)",
