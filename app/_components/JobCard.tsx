@@ -1,15 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import {
-  Ban,
-  Check,
-  CircleDot,
-  HelpCircle,
-  Loader2,
-  Pause,
-  X,
-} from "lucide-react";
+import { Ban, Check, CircleDot, Loader2, Pause, X } from "lucide-react";
 import type { Job, JobStatus, PendingInput } from "@/lib/jobs/types";
 
 const statusConfig: Record<
@@ -76,16 +68,22 @@ function PendingInputPanel({ job }: { job: Job }) {
   const pending = job.pendingInput!;
   const [busy, setBusy] = useState(false);
   const [denyMessage, setDenyMessage] = useState("");
+  const [error, setError] = useState<string | null>(null);
 
   const respond = async (response: unknown) => {
     if (busy) return;
     setBusy(true);
+    setError(null);
     try {
-      await fetch(`/api/jobs/${job.id}/respond`, {
+      const res = await fetch(`/api/jobs/${job.id}/respond`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ inputId: pending.id, response }),
       });
+      const json = (await res.json()) as { ok: boolean; error?: string };
+      if (!json.ok) setError(json.error ?? `HTTP ${res.status}`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "request failed");
     } finally {
       setBusy(false);
     }
@@ -114,6 +112,11 @@ function PendingInputPanel({ job }: { job: Job }) {
             </button>
           ))}
         </div>
+        {error ? (
+          <div className="font-mono text-[11px] text-[var(--signal-alert)]">
+            {error}
+          </div>
+        ) : null}
       </div>
     );
   }
@@ -139,6 +142,7 @@ function PendingInputPanel({ job }: { job: Job }) {
           value={denyMessage}
           onChange={(e) => setDenyMessage(e.target.value)}
           placeholder="拒否理由 (任意)"
+          aria-label="拒否理由"
           className="min-w-0 flex-1 border border-[var(--hairline)] bg-transparent px-2 py-1 font-mono text-[12px] text-[var(--ink)]"
         />
         <button
@@ -152,6 +156,11 @@ function PendingInputPanel({ job }: { job: Job }) {
           拒否
         </button>
       </div>
+      {error ? (
+        <div className="font-mono text-[11px] text-[var(--signal-alert)]">
+          {error}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -169,13 +178,19 @@ export function JobCard({ job }: { job: Job }) {
   const s = statusConfig[job.status];
   const Icon = s.icon;
   const [cancelBusy, setCancelBusy] = useState(false);
+  const [cancelError, setCancelError] = useState<string | null>(null);
   const cancellable = ["queued", "running", "waiting_input"].includes(job.status);
 
   const cancel = async () => {
     if (cancelBusy) return;
     setCancelBusy(true);
+    setCancelError(null);
     try {
-      await fetch(`/api/jobs/${job.id}/cancel`, { method: "POST" });
+      const res = await fetch(`/api/jobs/${job.id}/cancel`, { method: "POST" });
+      const json = (await res.json()) as { ok: boolean; error?: string };
+      if (!json.ok) setCancelError(json.error ?? `HTTP ${res.status}`);
+    } catch (err) {
+      setCancelError(err instanceof Error ? err.message : "request failed");
     } finally {
       setCancelBusy(false);
     }
@@ -225,6 +240,12 @@ export function JobCard({ job }: { job: Job }) {
       {job.error ? (
         <div className="font-mono text-[11px] text-[var(--signal-alert)]">
           {job.error}
+        </div>
+      ) : null}
+
+      {cancelError ? (
+        <div className="font-mono text-[11px] text-[var(--signal-alert)]">
+          {cancelError}
         </div>
       ) : null}
 

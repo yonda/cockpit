@@ -14,6 +14,7 @@ const ACTIVE = new Set(["queued", "running", "waiting_input"]);
 export function LaunchBoard({ issues }: { issues: LaunchIssue[] }) {
   const { result, live } = useJobsState();
   const [firing, setFiring] = useState<number | null>(null);
+  const [fireError, setFireError] = useState<string | null>(null);
 
   const jobs = result.status === "ok" ? result.jobs : [];
   const activeIssueNumbers = new Set(
@@ -23,8 +24,9 @@ export function LaunchBoard({ issues }: { issues: LaunchIssue[] }) {
   const fire = async (issue: LaunchIssue) => {
     if (firing !== null) return;
     setFiring(issue.number);
+    setFireError(null);
     try {
-      await fetch("/api/jobs/fire", {
+      const res = await fetch("/api/jobs/fire", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -32,6 +34,10 @@ export function LaunchBoard({ issues }: { issues: LaunchIssue[] }) {
           issueTitle: issue.title,
         }),
       });
+      const json = (await res.json()) as { ok: boolean; error?: string };
+      if (!json.ok) setFireError(json.error ?? `HTTP ${res.status}`);
+    } catch (err) {
+      setFireError(err instanceof Error ? err.message : "request failed");
     } finally {
       setFiring(null);
     }
@@ -43,6 +49,11 @@ export function LaunchBoard({ issues }: { issues: LaunchIssue[] }) {
         <h2 className="font-mono text-[13px] font-semibold uppercase tracking-[0.14em] text-[var(--ink-muted)]">
           Open Issues
         </h2>
+        {fireError ? (
+          <div className="font-mono text-[11px] text-[var(--signal-alert)]">
+            {fireError}
+          </div>
+        ) : null}
         {issues.length === 0 ? (
           <EmptyState message="open issue はありません" />
         ) : (
