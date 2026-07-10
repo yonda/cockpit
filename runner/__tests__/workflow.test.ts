@@ -199,4 +199,61 @@ describe("runIssueJob", () => {
     expect(store.get(job.id)!.status).toBe("failed");
     expect(store.get(job.id)!.error).toBe("boom");
   });
+
+  it("clears pendingInput when the executor throws while waiting_input", async () => {
+    const deps = makeDeps();
+    deps.executor.run = async (_opts, hooks) => {
+      void hooks.requestInput({
+        id: "in-1",
+        kind: "permission",
+        toolName: "Bash",
+        input: {},
+        createdAt: new Date().toISOString(),
+      });
+      await new Promise((r) => setTimeout(r, 10)); // waiting_input へ遷移するのを待つ
+      throw new Error("sdk crashed");
+    };
+    const job = store.create({
+      repo: "yonda/cockpit",
+      issueNumber: 1,
+      issueTitle: "test issue",
+      branch: "feature/1-test-issue",
+    });
+    await runIssueJob(deps, job.id, new AbortController().signal);
+    const final = store.get(job.id)!;
+    expect(final.status).toBe("failed");
+    expect(final.error).toBe("sdk crashed");
+    expect(final.pendingInput).toBeNull();
+  });
+
+  it("cancel during waiting_input resolves and leaves the job cancelled", async () => {
+    const deps = makeDeps();
+    deps.executor.askPermission = true;
+    const job = store.create({
+      repo: "yonda/cockpit",
+      issueNumber: 1,
+      issueTitle: "test issue",
+      branch: "feature/1-test-issue",
+    });
+    const controller = new AbortController();
+    const running = runIssueJob(deps, job.id, controller.signal);
+
+    await new Promise<void>((resolve) => {
+      store.on("job", (j) => {
+        if (j.id === job.id && j.status === "waiting_input") resolve();
+      });
+    });
+
+    // キャンセル側の契約: signal abort + broker.abort + cancelled 遷移
+    controller.abort();
+    deps.broker.abort(job.id);
+    store.transition(job.id, "cancelled", { pendingInput: null });
+
+    await running; // ハングしないこと
+    expect(store.get(job.id)!.status).toBe("cancelled");
+    expect(deps.executor.receivedResponse).toEqual({
+      kind: "deny",
+      message: "job cancelled",
+    });
+  });
 });

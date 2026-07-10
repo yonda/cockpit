@@ -182,7 +182,7 @@ export async function runIssueJob(
     const message = err instanceof Error ? err.message : String(err);
     const current = deps.store.get(jobId);
     if (current && ["running", "waiting_input"].includes(current.status)) {
-      deps.store.transition(jobId, "failed", { error: message });
+      deps.store.transition(jobId, "failed", { error: message, pendingInput: null });
     }
   }
 }
