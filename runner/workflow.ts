@@ -1,0 +1,188 @@
+import { randomUUID } from "node:crypto";
+import type { PendingInput } from "../lib/jobs/types";
+import type { AgentExecutor, CommandRunner } from "./executor";
+import type { InputBroker } from "./input-broker";
+import type { JobStore } from "./store";
+
+export type WorkflowDeps = {
+  store: JobStore;
+  broker: InputBroker;
+  commands: CommandRunner;
+  executor: AgentExecutor;
+  /** メインリポジトリの絶対パス (worktree 作成の起点) */
+  repoDir: string;
+};
+
+export function buildBranchName(issueNumber: number, title: string): string {
+  const slug = title
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 30)
+    .replace(/-+$/g, "");
+  return `feature/${issueNumber}-${slug || "issue"}`;
+}
+
+function buildPrompt(args: {
+  issueNumber: number;
+  title: string;
+  body: string;
+  branch: string;
+}): string {
+  return [
+    `Issue #${args.issueNumber}: ${args.title} を実装してください。`,
+    "",
+    "## Issue 本文",
+    args.body,
+    "",
+    "## 進め方",
+    `- このディレクトリは Issue 専用の git worktree です (ブランチ: ${args.branch})`,
+    "- 実装が終わったらテスト・lint を通し、変更をコミットして origin に push してください",
+    `- 最後に \`gh pr create --draft\` で draft PR を作成してください (本文に "closes #${args.issueNumber}" を含める)`,
+    "- draft PR の作成まで完了したら終了してください",
+  ].join("\n");
+}
+
+/** git worktree list --porcelain の出力から branch -> path を引く */
+function findWorktreePath(porcelain: string, branch: string): string | null {
+  let currentPath: string | null = null;
+  for (const line of porcelain.split("\n")) {
+    if (line.startsWith("worktree ")) currentPath = line.slice("worktree ".length);
+    if (line === `branch refs/heads/${branch}` && currentPath) return currentPath;
+  }
+  return null;
+}
+
+async function ensureWorktree(
+  deps: WorkflowDeps,
+  branch: string,
+): Promise<string> {
+  const list = async () => {
+    const { stdout } = await deps.commands.run(
+      "git",
+      ["worktree", "list", "--porcelain"],
+      { cwd: deps.repoDir },
+    );
+    return findWorktreePath(stdout, branch);
+  };
+
+  const existing = await list();
+  if (existing) return existing; // 再発射・リトライは既存 worktree を再利用
+
+  // git wt は未存在なら origin ベースで作成する (グローバル運用規約のツール)
+  await deps.commands.run("git", ["wt", branch], { cwd: deps.repoDir });
+  const created = await list();
+  if (!created) throw new Error(`worktree not found after git wt ${branch}`);
+  return created;
+}
+
+export async function runIssueJob(
+  deps: WorkflowDeps,
+  jobId: string,
+  signal: AbortSignal,
+): Promise<void> {
+  const job = deps.store.get(jobId);
+  if (!job) throw new Error(`unknown job: ${jobId}`);
+  const isResume = job.sessionId !== null && job.worktreePath !== null;
+  deps.store.transition(jobId, "running");
+
+  try {
+    // 1. worktree 準備
+    let worktreePath = job.worktreePath;
+    if (!isResume) {
+      await deps.commands.run("git", ["fetch", "origin", "main"], {
+        cwd: deps.repoDir,
+      });
+      worktreePath = await ensureWorktree(deps, job.branch);
+      deps.store.update(jobId, { worktreePath });
+    }
+
+    // 2. プロンプト組み立て
+    let prompt: string;
+    if (isResume) {
+      prompt =
+        "runner プロセスの再起動から復帰しました。直前の作業状態 (git status とここまでの会話) を確認し、Issue の実装を続行してください。完了条件は変わらず draft PR の作成までです。";
+    } else {
+      const { stdout } = await deps.commands.run(
+        "gh",
+        ["issue", "view", String(job.issueNumber), "--json", "title,body"],
+        { cwd: deps.repoDir },
+      );
+      const issue = JSON.parse(stdout) as { title: string; body: string };
+      prompt = buildPrompt({
+        issueNumber: job.issueNumber,
+        title: issue.title,
+        body: issue.body ?? "",
+        branch: job.branch,
+      });
+    }
+
+    // 3. エージェント実行
+    const result = await deps.executor.run(
+      {
+        cwd: worktreePath!,
+        prompt,
+        resumeSessionId: isResume ? job.sessionId : null,
+        signal,
+      },
+      {
+        onSessionId: (sessionId) => deps.store.update(jobId, { sessionId }),
+        onActivity: (text) => deps.store.update(jobId, { lastActivity: text }),
+        requestInput: async (raw) => {
+          const input: PendingInput = {
+            ...raw,
+            id: raw.id || `in-${randomUUID().slice(0, 8)}`,
+            createdAt: new Date().toISOString(),
+          };
+          deps.store.transition(jobId, "waiting_input", {
+            pendingInput: input,
+          });
+          const response = await deps.broker.request(jobId, input);
+          // キャンセル済みなら running に戻さない
+          if (deps.store.get(jobId)?.status === "waiting_input") {
+            deps.store.transition(jobId, "running", { pendingInput: null });
+          }
+          return response;
+        },
+      },
+    );
+
+    if (signal.aborted) return; // cancel 側が状態遷移を行う
+
+    if (!result.ok) {
+      deps.store.transition(jobId, "failed", { error: result.error });
+      return;
+    }
+
+    // 4. 成果検証: エージェントの自己申告を信用せず PR を確認する
+    const { stdout } = await deps.commands.run(
+      "gh",
+      [
+        "pr",
+        "list",
+        "--head",
+        job.branch,
+        "--state",
+        "open",
+        "--json",
+        "url",
+      ],
+      { cwd: deps.repoDir },
+    );
+    const prs = JSON.parse(stdout) as Array<{ url: string }>;
+    if (prs.length === 0) {
+      deps.store.transition(jobId, "failed", {
+        error: "エージェント終了後に draft PR が見つかりませんでした",
+      });
+      return;
+    }
+    deps.store.transition(jobId, "done", { prUrl: prs[0].url });
+  } catch (err) {
+    if (signal.aborted) return;
+    const message = err instanceof Error ? err.message : String(err);
+    const current = deps.store.get(jobId);
+    if (current && ["running", "waiting_input"].includes(current.status)) {
+      deps.store.transition(jobId, "failed", { error: message });
+    }
+  }
+}
