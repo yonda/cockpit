@@ -84,7 +84,11 @@ export async function runIssueJob(
   const job = deps.store.get(jobId);
   if (!job) throw new Error(`unknown job: ${jobId}`);
   const isResume = job.sessionId !== null && job.worktreePath !== null;
-  deps.store.transition(jobId, "running");
+  if (job.status === "waiting_input") {
+    deps.store.transition(jobId, "running", { pendingInput: null });
+  } else if (job.status !== "running") {
+    deps.store.transition(jobId, "running");
+  }
 
   try {
     // 1. worktree 準備
