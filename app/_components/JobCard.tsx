@@ -290,7 +290,9 @@ export function JobCard({ job }: { job: Job }) {
       ) : null}
 
       {job.status === "waiting_input" && job.pendingInput ? (
-        <PendingInputPanel job={job} />
+        // key で pendingInput 交代時にパネルを再マウントし、
+        // 前の質問の selections/busy/denyMessage/error を持ち越さない
+        <PendingInputPanel key={job.pendingInput.id} job={job} />
       ) : null}
 
       {job.error ? (
