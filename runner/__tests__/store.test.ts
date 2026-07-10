@@ -54,4 +54,12 @@ describe("JobStore", () => {
     expect(store.get(job.id)?.sessionId).toBe("sess-1");
     expect(store.get(job.id)?.status).toBe("queued");
   });
+
+  it("update rejects an explicit status key even when undefined", () => {
+    const job = store.create(fields);
+    expect(() =>
+      store.update(job.id, { status: undefined, sessionId: "x" }),
+    ).toThrow(/use transition/);
+    expect(store.get(job.id)?.status).toBe("queued");
+  });
 });

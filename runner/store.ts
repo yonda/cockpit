@@ -76,7 +76,7 @@ export class JobStore extends EventEmitter {
 
   update(id: string, patch: Partial<Job>): Job {
     const job = this.mustGet(id);
-    if (patch.status && patch.status !== job.status) {
+    if ("status" in patch && patch.status !== job.status) {
       throw new Error("use transition() to change status");
     }
     return this.save({ ...job, ...patch });
