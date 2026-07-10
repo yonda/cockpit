@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { canTransition } from "../../lib/jobs/types";
+import { canTransition, isPendingInputResponse } from "../../lib/jobs/types";
 
 describe("canTransition", () => {
   it("allows the happy path", () => {
@@ -17,5 +17,39 @@ describe("canTransition", () => {
 
   it("rejects skipping queued -> done", () => {
     expect(canTransition("queued", "done")).toBe(false);
+  });
+});
+
+describe("isPendingInputResponse", () => {
+  it("accepts allow", () => {
+    expect(isPendingInputResponse({ kind: "allow" })).toBe(true);
+  });
+
+  it("accepts deny with message", () => {
+    expect(isPendingInputResponse({ kind: "deny", message: "x" })).toBe(true);
+  });
+
+  it("accepts answers with string[][]", () => {
+    expect(
+      isPendingInputResponse({ kind: "answers", answers: [["a"]] }),
+    ).toBe(true);
+  });
+
+  it("rejects empty object", () => {
+    expect(isPendingInputResponse({})).toBe(false);
+  });
+
+  it("rejects null", () => {
+    expect(isPendingInputResponse(null)).toBe(false);
+  });
+
+  it("rejects deny without message", () => {
+    expect(isPendingInputResponse({ kind: "deny" })).toBe(false);
+  });
+
+  it("rejects answers with non-array answers", () => {
+    expect(isPendingInputResponse({ kind: "answers", answers: "x" })).toBe(
+      false,
+    );
   });
 });

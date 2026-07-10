@@ -51,6 +51,24 @@ export type PendingInputResponse =
   /** AskUserQuestion への回答。質問ごとに選択肢ラベルの配列 */
   | { kind: "answers"; answers: string[][] };
 
+export function isPendingInputResponse(
+  value: unknown,
+): value is PendingInputResponse {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const v = value as { kind?: unknown; message?: unknown; answers?: unknown };
+  if (v.kind === "allow") return true;
+  if (v.kind === "deny") return typeof v.message === "string";
+  if (v.kind === "answers") {
+    return (
+      Array.isArray(v.answers) &&
+      v.answers.every(
+        (a) => Array.isArray(a) && a.every((s) => typeof s === "string"),
+      )
+    );
+  }
+  return false;
+}
+
 // ---- ジョブ --------------------------------------------------------------
 
 export type Job = {

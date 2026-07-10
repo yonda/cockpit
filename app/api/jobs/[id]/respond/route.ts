@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { isPendingInputResponse } from "@/lib/jobs/types";
 import { callRunner } from "@/lib/runner/client";
 
 export const dynamic = "force-dynamic";
@@ -15,9 +16,9 @@ export async function POST(
   } catch {
     return NextResponse.json({ ok: false, error: "invalid json" }, { status: 400 });
   }
-  if (typeof body.inputId !== "string" || typeof body.response !== "object") {
+  if (typeof body.inputId !== "string" || !isPendingInputResponse(body.response)) {
     return NextResponse.json(
-      { ok: false, error: "inputId and response are required" },
+      { ok: false, error: "inputId and a valid response are required" },
       { status: 400 },
     );
   }

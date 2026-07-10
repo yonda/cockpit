@@ -55,7 +55,11 @@ export function toPermissionResult(
       updatedInput: { questions: originalInput.questions, answers },
     };
   }
-  return { behavior: "allow", updatedInput: originalInput };
+  if (response.kind === "allow") {
+    return { behavior: "allow", updatedInput: originalInput };
+  }
+  // 未知の形は fail-closed: 誤って許可に倒さない
+  return { behavior: "deny", message: "unrecognized response shape" };
 }
 
 function extractAssistantText(message: SDKMessage): string | null {

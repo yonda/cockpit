@@ -34,4 +34,11 @@ describe("toPermissionResult", () => {
       },
     });
   });
+
+  it("fails closed on unrecognized response shapes", () => {
+    expect(toPermissionResult({} as never, {})).toEqual({
+      behavior: "deny",
+      message: "unrecognized response shape",
+    });
+  });
 });
