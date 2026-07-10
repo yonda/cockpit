@@ -23,7 +23,7 @@ const ALLOWED_TOOLS = [
   "Task",
   "Bash(git:*)",
   "Bash(gh issue view:*)",
-  "Bash(gh pr create:*)",
+  "Bash(gh pr create --draft:*)",
   "Bash(gh pr list:*)",
   "Bash(pnpm install:*)",
   "Bash(pnpm test:*)",
@@ -101,10 +101,10 @@ export class SdkExecutor implements AgentExecutor {
         },
       });
 
-      // ジョブキャンセル: 実行中ターンを中断して子プロセスを畳む
-      // (Query は AsyncGenerator + interrupt()/close() を持つ)
+      // ジョブキャンセル: 子プロセスを強制終了する。
+      // (interrupt() は streaming input モード限定のため string prompt では使えない。
+      //  close() は SDK が spawn した CLI プロセスを終了させる)
       const onAbort = () => {
-        void stream.interrupt().catch(() => {});
         stream.close();
       };
       if (opts.signal.aborted) onAbort();
