@@ -5,10 +5,13 @@ cd "$(dirname "$0")/.."
 
 LABEL="com.cockpit.app"
 CAL_LABEL="com.cockpit.calendar"
+RUNNER_LABEL="com.cockpit.runner"
 PLIST_TEMPLATE="services/cockpit.plist.template"
 CAL_PLIST_TEMPLATE="services/cockpit-calendar.plist.template"
+RUNNER_PLIST_TEMPLATE="services/cockpit-runner.plist.template"
 PLIST_DEST="$HOME/Library/LaunchAgents/${LABEL}.plist"
 CAL_PLIST_DEST="$HOME/Library/LaunchAgents/${CAL_LABEL}.plist"
+RUNNER_PLIST_DEST="$HOME/Library/LaunchAgents/${RUNNER_LABEL}.plist"
 PROJECT_DIR="$(pwd -P)"
 DOMAIN_TARGET="gui/$(id -u)"
 
@@ -26,8 +29,13 @@ Commands:
   calendar-install    calendar-sync エージェントを launchd に登録する
   calendar-uninstall  calendar-sync エージェントを launchd から外す
   calendar-status     calendar-sync エージェントの登録状態を表示
+  runner-install      runner を launchd に登録する
+  runner-uninstall    runner を launchd から外す
+  runner-restart      runner プロセスを再起動する
+  runner-status       runner の登録状態を表示
+  runner-logs         runner ログを tail -f
 
-Label: ${LABEL} / ${CAL_LABEL}
+Label: ${LABEL} / ${CAL_LABEL} / ${RUNNER_LABEL}
 Plist: ${PLIST_DEST}
 EOF
 }
@@ -38,6 +46,7 @@ render_plist() {
     -e "s|__LABEL__|${label}|g" \
     -e "s|__PROJECT_DIR__|${PROJECT_DIR}|g" \
     -e "s|__HOME__|${HOME}|g" \
+    -e "s|__NODE__|$(command -v node)|g" \
     "${template}"
 }
 
@@ -102,6 +111,13 @@ cmd_errlogs() {
   tail -f "$path"
 }
 
+cmd_runner_logs() {
+  local out_path="$HOME/Library/Logs/cockpit-runner.out.log"
+  local err_path="$HOME/Library/Logs/cockpit-runner.err.log"
+  [[ -f "$out_path" ]] || { echo "no log yet: $out_path (err log: $err_path)"; exit 0; }
+  tail -f "$out_path" "$err_path"
+}
+
 case "${1:-}" in
   install)            cmd_install ;;
   uninstall)          uninstall_agent "${LABEL}" "${PLIST_DEST}" ;;
@@ -113,6 +129,18 @@ case "${1:-}" in
                       echo "calendar-sync を launchd に登録しました" ;;
   calendar-uninstall) uninstall_agent "${CAL_LABEL}" "${CAL_PLIST_DEST}" ;;
   calendar-status)    status_agent "${CAL_LABEL}" ;;
+  runner-install)     [[ -f dist/runner.cjs ]] || { echo "先に pnpm build:runner を実行してください" >&2; exit 1; }
+                      install_agent "${RUNNER_PLIST_TEMPLATE}" "${RUNNER_LABEL}" "${RUNNER_PLIST_DEST}"
+                      echo "runner を launchd に登録しました" ;;
+  runner-uninstall)   uninstall_agent "${RUNNER_LABEL}" "${RUNNER_PLIST_DEST}" ;;
+  runner-restart)     launchctl kickstart -k "${DOMAIN_TARGET}/${RUNNER_LABEL}"
+                      echo "runner restarted" ;;
+  runner-status)      status_agent "${RUNNER_LABEL}"
+                      echo "--- health ---"
+                      command -v gh >/dev/null && gh auth status >/dev/null 2>&1 && echo "gh: ok" || echo "gh: NG (gh auth login)"
+                      git wt >/dev/null 2>&1 && echo "git wt: ok" || echo "git wt: NG (brew install k1LoW/tap/git-wt)"
+                      [[ -S "$HOME/.cache/cockpit/runner.sock" ]] && echo "socket: ok" || echo "socket: not listening" ;;
+  runner-logs)        cmd_runner_logs ;;
   ""|help|-h|--help)  usage ;;
   *) echo "unknown command: $1" >&2; usage; exit 1 ;;
 esac

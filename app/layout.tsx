@@ -3,6 +3,7 @@ import { JetBrains_Mono, Manrope } from "next/font/google";
 import { Header } from "./_components/Header";
 import { HerdrProvider } from "./_components/useHerdrState";
 import { AgentNotifyWatcher } from "./_components/AgentNotifyWatcher";
+import { JobNotifyWatcher } from "./_components/JobNotifyWatcher";
 import { BusyStatusDialog } from "./_components/BusyStatusDialog";
 import { fetchViewerStatus } from "@/lib/github/fetchers";
 import "./globals.css";
@@ -57,6 +58,7 @@ export default async function RootLayout({
         {/* herdr の SSE 接続をアプリ全体で 1 本共有し、どのタブにいても agent 通知を出す */}
         <HerdrProvider>
           <AgentNotifyWatcher />
+          <JobNotifyWatcher />
           <BusyStatusDialog status={viewerStatus} />
           <Header />
           {children}
