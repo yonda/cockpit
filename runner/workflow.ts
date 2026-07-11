@@ -88,6 +88,16 @@ async function ensureWorktree(
     return findWorktreePath(stdout, branch);
   };
 
+  // sub-task ブランチは origin/main を起点に作るため upstream が origin/main になる。
+  // ユーザーのグローバル push.default=tracking のままだと、エージェントの `git push` が
+  // feature ブランチではなく origin/main に飛び、draft PR ゲートを素通りして main を汚す
+  // (dogfood 2026-07-11 で実際に発生)。repo-local で push.default=current にすると、
+  // 各ブランチは同名リモートブランチに push される (main→main / feature/X→feature/X)。
+  // 明示 refspec (`git push origin HEAD:main`) には影響しない。idempotent。
+  await deps.commands.run("git", ["config", "push.default", "current"], {
+    cwd: deps.repoDir,
+  });
+
   const existing = await list();
   if (existing) return existing; // 再発射・リトライは既存 worktree を再利用
 
