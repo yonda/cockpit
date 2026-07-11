@@ -70,6 +70,14 @@ describe("PbiStore", () => {
     expect(t1.jobId).toBe("job-9");
   });
 
+  it("fails fast on unknown sub-task key", () => {
+    const pbi = store.create({ repo: "r", issueNumber: 1, title: "t" });
+    store.setSubTasks(pbi.id, [rec({ key: "t1" })]);
+    expect(() =>
+      store.transitionSubTask(pbi.id, "nonexistent", "running"),
+    ).toThrow(/unknown sub-task/);
+  });
+
   it("adds and clears escalations", () => {
     const pbi = store.create({ repo: "r", issueNumber: 1, title: "t" });
     const withEsc = store.addEscalation(pbi.id, {

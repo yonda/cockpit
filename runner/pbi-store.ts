@@ -108,6 +108,9 @@ export class PbiStore extends EventEmitter {
       }
       return { ...t, ...patch, state: to };
     });
+    if (!pbi.subTasks.some((t) => t.key === key)) {
+      throw new Error(`unknown sub-task: ${key} (${id})`);
+    }
     return this.save({ ...pbi, subTasks });
   }
 
@@ -141,6 +144,7 @@ export class PbiStore extends EventEmitter {
   private save(pbi: PbiJob): PbiJob {
     const next = { ...pbi, updatedAt: new Date().toISOString() };
     this.pbis.set(next.id, next);
+    // 書きかけファイルを読まれないよう atomic write
     const path = join(this.dir, `${next.id}.json`);
     const tmp = `${path}.tmp`;
     writeFileSync(tmp, JSON.stringify(next, null, 2));
