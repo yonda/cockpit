@@ -34,6 +34,9 @@ describe("canSubTaskTransition", () => {
     expect(canSubTaskTransition("pending", "skipped")).toBe(true);
     expect(canSubTaskTransition("in_review", "failed")).toBe(true);
   });
+  it("allows failed -> pending for retry / boot reconciliation", () => {
+    expect(canSubTaskTransition("failed", "pending")).toBe(true);
+  });
   it("rejects transitions out of terminal states", () => {
     expect(canSubTaskTransition("merged", "running")).toBe(false);
     expect(canSubTaskTransition("skipped", "running")).toBe(false);

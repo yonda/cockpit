@@ -20,22 +20,9 @@ export function retryTask(
   pbiId: string,
   key: string,
 ): void {
+  deps.pbiStore.transitionSubTask(pbiId, key, "pending", { jobId: null });
   clearEscalationsFor(deps.pbiStore, pbiId, key);
-  const pbi = deps.pbiStore.get(pbiId);
-  if (!pbi) return;
-  const task = pbi.subTasks.find((t) => t.key === key);
-  if (!task || task.issueNumber == null) return;
-  // sub-task の状態機械は failed -> pending を許可していない
-  // （failed: ["running", "skipped"]）ため、dispatchReady の
-  // pending 経由ではなく、直接 running へ遷移させてジョブを発射する。
-  const job = deps.jobStore.create({
-    repo: pbi.repo,
-    issueNumber: task.issueNumber,
-    issueTitle: task.title,
-    branch: task.branch ?? `feature/${task.issueNumber}-${task.key}`,
-  });
-  deps.pbiStore.transitionSubTask(pbiId, key, "running", { jobId: job.id });
-  deps.scheduler.poke();
+  dispatchReady(deps, pbiId);
 }
 
 export function skipTask(
@@ -66,7 +53,7 @@ export function cancelPbi(deps: PbiExecutorDeps, pbiId: string): void {
   const pbi = deps.pbiStore.get(pbiId);
   if (!pbi) return;
   for (const t of pbi.subTasks) {
-    if (t.jobId && ["running"].includes(t.state)) {
+    if (t.jobId && t.state === "running") {
       deps.scheduler.cancel(t.jobId);
     }
   }

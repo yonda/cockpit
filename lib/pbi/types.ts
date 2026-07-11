@@ -50,7 +50,7 @@ const SUBTASK_TRANSITIONS: Record<SubTaskState, readonly SubTaskState[]> = {
   pending: ["running", "skipped", "failed"],
   running: ["in_review", "failed", "skipped"],
   in_review: ["merged", "failed", "skipped"],
-  failed: ["running", "skipped"], // 失敗 → リトライ / スキップ
+  failed: ["running", "pending", "skipped"], // 失敗 → リトライ / スキップ
   merged: [],
   skipped: [],
 };
