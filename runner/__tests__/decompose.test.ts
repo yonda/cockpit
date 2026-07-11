@@ -67,13 +67,6 @@ describe("runDecomposition", () => {
 
   const deps = (executor: AgentExecutor): DecomposeDeps => ({
     executor,
-    github: {
-      fetchIssue: async () => ({ title: "", body: "" }),
-      createSubIssue: async () => ({ number: 0, url: "" }),
-      updateIssueBody: async () => {},
-      closeIssue: async () => {},
-      prStateForBranch: async () => ({ kind: "none" }),
-    },
     prepareCwd: fakePrepareCwd(scratch),
   });
 
@@ -136,7 +129,6 @@ describe("runDecomposition", () => {
     const res = await runDecomposition(
       {
         executor: boom,
-        github: deps(boom).github,
         prepareCwd: async () => ({
           cwd: scratch,
           cleanup: async () => {

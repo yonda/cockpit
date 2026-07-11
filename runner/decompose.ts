@@ -2,7 +2,6 @@ import { readFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import type { AgentExecutor } from "./executor";
 import type { CommandRunner } from "./exec";
-import type { GitHubClient } from "./github";
 import { isSubTaskArray, type SubTask } from "../lib/pbi/types";
 
 export const DECOMPOSITION_FILE = "decomposition.json";
@@ -11,7 +10,6 @@ export type PreparedCwd = { cwd: string; cleanup: () => Promise<void> };
 
 export type DecomposeDeps = {
   executor: AgentExecutor;
-  github: GitHubClient;
   /** 分解を走らせる cwd を用意する。実運用は読み取り worktree を作り、cleanup で破棄する。
       テストは temp dir を返すフェイクを注入する（DI: マジックパス判定はしない）。 */
   prepareCwd: (issueNumber: number) => Promise<PreparedCwd>;
