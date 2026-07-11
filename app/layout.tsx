@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { JetBrains_Mono, Manrope } from "next/font/google";
 import { Header } from "./_components/Header";
+import { KeyboardNav } from "./_components/KeyboardNav";
 import { HerdrProvider } from "./_components/useHerdrState";
 import { AgentNotifyWatcher } from "./_components/AgentNotifyWatcher";
 import { JobNotifyWatcher } from "./_components/JobNotifyWatcher";
@@ -59,6 +60,7 @@ export default async function RootLayout({
         <HerdrProvider>
           <AgentNotifyWatcher />
           <JobNotifyWatcher />
+          <KeyboardNav />
           <BusyStatusDialog status={viewerStatus} />
           <Header />
           {children}
