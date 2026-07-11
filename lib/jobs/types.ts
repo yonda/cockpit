@@ -77,6 +77,8 @@ export type Job = {
   issueNumber: number;
   issueTitle: string;
   branch: string; // feature/<n>-<slug>
+  /** ジョブ種別。実装ジョブ or レビュー返信ジョブ。 */
+  kind: "implement" | "review_reply";
   worktreePath: string | null;
   status: JobStatus;
   sessionId: string | null;

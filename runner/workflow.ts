@@ -45,6 +45,24 @@ function buildPrompt(args: {
   ].join("\n");
 }
 
+function buildReviewReplyPrompt(args: {
+  issueNumber: number;
+  title: string;
+  branch: string;
+}): string {
+  return [
+    `sub-task「${args.title}」(Issue #${args.issueNumber}) の draft PR にレビューコメントが付きました。`,
+    "",
+    "## 進め方",
+    `- このディレクトリは既存の git worktree です (ブランチ: ${args.branch})`,
+    "- `gh pr view --json reviewThreads` 等で未解決のレビュースレッドを確認してください",
+    "- 指摘に対応し、テスト・lint を通し、コミットして origin に push してください",
+    "- 各スレッドに対応内容を返信してください (gh api のレビューコメント返信)",
+    "- コミットメッセージにも PR 本文にも closing keyword (`close`/`fixes`/`resolves` などに続けて番号) を書かないこと",
+    "- 対応と返信まで終えたら終了してください",
+  ].join("\n");
+}
+
 /** git worktree list --porcelain の出力から branch -> path を引く */
 function findWorktreePath(porcelain: string, branch: string): string | null {
   let currentPath: string | null = null;
@@ -133,6 +151,18 @@ export async function runIssueJob(
       prompt =
         "runner プロセスの再起動から復帰しました。直前の作業状態 (git status とここまでの会話) を確認し、Issue の実装を続行してください。完了条件は変わらず draft PR の作成までです。" +
         "なお、コミットメッセージにも PR 本文にも closing keyword (close/fixes/resolves などに続けて番号) を書かないでください。Issue のクローズはマージ後に人間または上位のマージ検知が行います。関連付けが必要なら PR 本文に refs で参照してください。";
+    } else if (job.kind === "review_reply") {
+      const { stdout } = await deps.commands.run(
+        "gh",
+        ["issue", "view", String(job.issueNumber), "--json", "title"],
+        { cwd: deps.repoDir },
+      );
+      const issue = JSON.parse(stdout) as { title: string };
+      prompt = buildReviewReplyPrompt({
+        issueNumber: job.issueNumber,
+        title: issue.title,
+        branch: job.branch,
+      });
     } else {
       const { stdout } = await deps.commands.run(
         "gh",

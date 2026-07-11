@@ -60,15 +60,30 @@ class FakeCommands implements CommandRunner {
       throw new Error(`show-ref: ${ref} not found`); // 未存在は非ゼロ終了を模す
     }
     if (cmd === "git" && args[0] === "worktree" && args[1] === "add") {
-      // git worktree add <path> ... の path からブランチを記録
-      this.createdWorktrees.add("feature/1-test-issue");
+      // git worktree add <path> [-b branch] ... または git worktree add <path> <branch>
+      const bIndex = args.indexOf("-b");
+      let branch: string | undefined;
+      if (bIndex >= 0) {
+        branch = args[bIndex + 1]; // -b branch format
+      } else if (args[3]) {
+        branch = args[3]; // add <path> <branch> format
+      }
+      if (branch) {
+        this.createdWorktrees.add(branch);
+      }
       return { stdout: "", stderr: "" };
     }
     if (cmd === "git" && args[0] === "worktree") {
       // 作成済みブランチだけ list に出す
-      if (this.createdWorktrees.has("feature/1-test-issue")) {
+      if (this.createdWorktrees.size > 0) {
+        const entries = Array.from(this.createdWorktrees)
+          .map(
+            (branch) =>
+              `worktree /tmp/cockpit-wt/${branch}\nbranch refs/heads/${branch}`,
+          )
+          .join("\n");
         return {
-          stdout: `worktree /tmp/cockpit-wt/feature/1-test-issue\nbranch refs/heads/feature/1-test-issue\n`,
+          stdout: entries + "\n",
           stderr: "",
         };
       }
@@ -344,5 +359,26 @@ describe("runIssueJob", () => {
       kind: "deny",
       message: "job cancelled",
     });
+  });
+
+  it("uses a review-reply prompt when the job kind is review_reply", async () => {
+    const deps = makeDeps();
+    const job = store.create({
+      repo: "yonda/cockpit",
+      issueNumber: 9,
+      issueTitle: "検索改善",
+      branch: "feature/9-search",
+      kind: "review_reply",
+    });
+
+    await runIssueJob(deps, job.id, new AbortController().signal);
+
+    const prompt = deps.executor.lastOpts!.prompt;
+    expect(prompt).toMatch(/レビュー/);
+    expect(prompt).not.toMatch(/(close[sd]?|fix(e[sd])?|resolve[sd]?)\s*#\d/i);
+    // review-reply は新しい実装ではなく PR への追従なので、既存 worktree を再利用する
+    expect(deps.commands.calls).toContain(
+      "git worktree list --porcelain",
+    );
   });
 });

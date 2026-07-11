@@ -47,11 +47,13 @@ export class JobStore extends EventEmitter {
     issueNumber: number;
     issueTitle: string;
     branch: string;
+    kind?: "implement" | "review_reply";
   }): Job {
     const now = new Date().toISOString();
     const job: Job = {
       id: `job-${Date.now()}-${randomUUID().slice(0, 8)}`,
       ...fields,
+      kind: fields.kind ?? "implement",
       worktreePath: null,
       status: "queued",
       sessionId: null,
