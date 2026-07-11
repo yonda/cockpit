@@ -1,8 +1,9 @@
 allowBuilds:
-  esbuild: true
+  # esbuild は postinstall なしで動く (JS ラッパーが @esbuild/darwin-arm64 を spawn)。
+  # true にすると bin が実バイナリに置換され、pnpm の node シムと衝突して壊れる。
+  esbuild: false
   sharp: true
   unrs-resolver: true
 onlyBuiltDependencies:
-  - esbuild
   - sharp
   - unrs-resolver
