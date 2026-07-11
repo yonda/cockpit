@@ -4,6 +4,7 @@ import { useState } from "react";
 import { Ban, Check, CircleDot, Loader2, Pause, X } from "lucide-react";
 import type { Job, JobStatus } from "@/lib/jobs/types";
 import { PendingInputPanel } from "./PendingInputPanel";
+import { RelativeTime } from "./RelativeTime";
 
 const statusConfig: Record<
   JobStatus,
@@ -46,15 +47,6 @@ const statusConfig: Record<
     bg: "bg-[var(--hairline)]/20 border-[var(--hairline)]",
   },
 };
-
-function relativeTime(iso: string): string {
-  const min = Math.floor((Date.now() - new Date(iso).getTime()) / 60_000);
-  if (min < 1) return "just now";
-  if (min < 60) return `${min}m ago`;
-  const hours = Math.floor(min / 60);
-  if (hours < 24) return `${hours}h ago`;
-  return `${Math.floor(hours / 24)}d ago`;
-}
 
 export function JobCard({ job }: { job: Job }) {
   const s = statusConfig[job.status];
@@ -150,9 +142,11 @@ export function JobCard({ job }: { job: Job }) {
           ) : null}
         </div>
         <div className="flex shrink-0 items-center gap-2">
-          <span className="font-mono text-[10px] text-[var(--ink-muted)]">
-            {relativeTime(job.updatedAt)}
-          </span>
+          <RelativeTime
+            iso={job.updatedAt}
+            variant="short"
+            className="font-mono text-[10px] text-[var(--ink-muted)]"
+          />
           {cancellable ? (
             <button
               type="button"
