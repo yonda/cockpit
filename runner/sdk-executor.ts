@@ -31,12 +31,18 @@ const ALLOWED_TOOLS = [
   "Bash(gh issue view:*)",
   "Bash(gh pr create --draft:*)",
   "Bash(gh pr list:*)",
-  "Bash(pnpm install:*)",
-  "Bash(pnpm test:*)",
-  "Bash(pnpm lint:*)",
-  "Bash(pnpm build:*)",
-  "Bash(pnpm vitest:*)",
+  // pnpm はこのプロジェクトのビルド/テスト tooling そのもの。install/test/lint/build/
+  // vitest だけに絞ると exec tsc / run typecheck / prettier 等が canUseTool に落ちて
+  // 許可プロンプトが洪水になる。実装ジョブは隔離 worktree 内で動くので pnpm を丸ごと
+  // 許可し、リスクは worktree に収める。
+  "Bash(pnpm:*)",
 ];
+
+// headless 実装ジョブでは使わせないツール。deny rules は canUseTool より前に評価される
+// ため、プロンプトを出さずに拒否される。Skill: グローバル CLAUDE.md の PR ワークフローを
+// 継承して /code-review 等を呼ぼうとするのを止める（セルフレビューは runner の DoD ゲート側の
+// 責務で、実装エージェント自身にはさせない）。
+const DISALLOWED_TOOLS = ["Skill"];
 
 export function toPermissionResult(
   response: PendingInputResponse,
@@ -95,6 +101,7 @@ export class SdkExecutor implements AgentExecutor {
           cwd: opts.cwd,
           permissionMode: "acceptEdits",
           allowedTools: ALLOWED_TOOLS,
+          disallowedTools: DISALLOWED_TOOLS,
           resume: opts.resumeSessionId ?? undefined,
           // 実際の CanUseTool は (toolName, input, { signal, toolUseID, ... })
           // の3引数。3番目の control メタデータはここでは使わない。

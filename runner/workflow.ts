@@ -41,6 +41,7 @@ function buildPrompt(args: {
     "- 実装が終わったらテスト・lint を通し、変更をコミットして origin に push してください",
     `- 最後に \`gh pr create --draft\` で draft PR を作成してください`,
     `- コミットメッセージにも PR 本文にも closing keyword (\`close\`/\`fixes\`/\`resolves\` などに続けて番号) を書かないこと。Issue のクローズはマージ後に人間または上位のマージ検知が行います (push だけで Issue が早期クローズすると、上位のマージ検知が壊れるため)。関連付けが必要なら PR 本文に "refs #${args.issueNumber}" と書いてください`,
+    "- セルフレビュー用のスキル (/code-review 等) は実行しないでください。実装 → テスト/lint → コミット → push → draft PR に集中してください (レビューは別レイヤーの責務です)",
     "- draft PR の作成まで完了したら終了してください",
   ].join("\n");
 }
@@ -59,6 +60,7 @@ function buildReviewReplyPrompt(args: {
     "- 指摘に対応し、テスト・lint を通し、コミットして origin に push してください",
     "- 各スレッドに対応内容を返信してください (gh api のレビューコメント返信)",
     "- コミットメッセージにも PR 本文にも closing keyword (`close`/`fixes`/`resolves` などに続けて番号) を書かないこと",
+    "- セルフレビュー用のスキル (/code-review 等) は実行しないでください",
     "- 対応と返信まで終えたら終了してください",
   ].join("\n");
 }
