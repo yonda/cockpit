@@ -1,4 +1,5 @@
 import { HintTooltip } from "@/app/_components/HintTooltip";
+import { PbiBoard } from "@/app/_components/PbiBoard";
 import { SectionBoundary } from "@/app/_components/SectionBoundary";
 import { SectionErrorState } from "@/app/_components/ErrorState";
 import { fetchPbiIssues, type LaunchIssue } from "@/lib/github/issues";
@@ -27,10 +28,7 @@ export default async function PbiPage() {
         <div className="h-px w-full bg-gradient-to-r from-[var(--accent)]/50 via-[var(--hairline-strong)] to-transparent" />
         <SectionBoundary title="pbi">
           {issueError ? <SectionErrorState error={issueError} /> : null}
-          {/* Task B8 で <PbiBoard issues={issues} /> に差し替え */}
-          <div className="font-mono text-[12px] text-[var(--ink-muted)]">
-            {issues.length} 件の pbi Issue（UI は実装中）
-          </div>
+          <PbiBoard issues={issues} />
         </SectionBoundary>
       </main>
     </div>
