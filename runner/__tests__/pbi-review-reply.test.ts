@@ -74,4 +74,20 @@ describe("fireReviewReply", () => {
     fireReviewReply(deps, pbi.id, "t1");
     expect(jobStore.list().filter((j) => j.kind === "review_reply")).toHaveLength(0);
   });
+
+  it("no-ops when a review-reply job is already running for the sub-task", () => {
+    const pbi = pbiStore.create({ repo: "yonda/cockpit", issueNumber: 42, title: "P" });
+    pbiStore.transition(pbi.id, "awaiting_approval");
+    pbiStore.transition(pbi.id, "executing");
+    const running = jobStore.create({ repo: "yonda/cockpit", issueNumber: 100, issueTitle: "t", branch: "feature/100-t", kind: "review_reply" });
+    jobStore.transition(running.id, "running");
+    pbiStore.setSubTasks(pbi.id, [rec({ key: "t1", jobId: running.id })]);
+    pbiStore.addEscalation(pbi.id, { kind: "review_comments", subTaskKey: "t1", detail: "2 件" });
+
+    fireReviewReply(deps, pbi.id, "t1");
+
+    // 二重発射しない: 新しい review_reply ジョブは作られず、エスカレーションも残る（誤消去しない）
+    expect(jobStore.list().filter((j) => j.kind === "review_reply")).toHaveLength(1);
+    expect(pbiStore.get(pbi.id)!.escalations.some((e) => e.kind === "review_comments")).toBe(true);
+  });
 });

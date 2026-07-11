@@ -61,13 +61,13 @@ export function SubTaskRow({
         </span>
       </div>
 
-      {task.state === "running" && job?.lastActivity ? (
+      {(task.state === "running" || task.state === "in_review") && job?.lastActivity ? (
         <div className="truncate font-mono text-[11px] text-[var(--ink-muted)]" title={job.lastActivity}>
           {job.lastActivity}
         </div>
       ) : null}
 
-      {task.state === "running" && job?.status === "waiting_input" && job.pendingInput ? (
+      {(task.state === "running" || task.state === "in_review") && job?.status === "waiting_input" && job.pendingInput ? (
         <PendingInputPanel key={job.pendingInput.id} job={job} />
       ) : null}
 

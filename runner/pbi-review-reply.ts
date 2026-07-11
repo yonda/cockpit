@@ -17,6 +17,10 @@ export function fireReviewReply(
   const task = pbi.subTasks.find((t) => t.key === key);
   if (!task || task.state !== "in_review" || task.issueNumber == null) return;
 
+  // 既に review-reply ジョブが走っている場合は二重発射しない（先行ジョブが孤児化するのを防ぐ）
+  const current = task.jobId ? deps.jobStore.get(task.jobId) : undefined;
+  if (current && ["queued", "running", "waiting_input"].includes(current.status)) return;
+
   // review_comments エスカレーションをクリア
   for (const e of pbi.escalations.filter(
     (e) => e.kind === "review_comments" && e.subTaskKey === key,
