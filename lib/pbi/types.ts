@@ -166,6 +166,11 @@ export type PbiRunnerRequest =
       method: "pbi.skipTask";
       params: { pbiId: string; key: string };
     }
-  | { id: string; method: "pbi.cancel"; params: { pbiId: string } };
+  | { id: string; method: "pbi.cancel"; params: { pbiId: string } }
+  | {
+      id: string;
+      method: "pbi.fireReviewReply";
+      params: { pbiId: string; key: string };
+    };
 
 export type PbiRunnerEvent = { event: "pbi.updated"; data: PbiJob };

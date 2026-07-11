@@ -16,6 +16,7 @@ import {
   skipTask,
 } from "./pbi-actions";
 import { dispatchReady, type PbiExecutorDeps } from "./pbi-executor";
+import { fireReviewReply } from "./pbi-review-reply";
 
 export type PbiServerDeps = {
   pbiStore: PbiStore;
@@ -105,6 +106,10 @@ export async function handlePbiRequest(
 
     case "pbi.cancel":
       cancelPbi(deps.exec, request.params.pbiId);
+      return { result: {} };
+
+    case "pbi.fireReviewReply":
+      fireReviewReply(deps.exec, request.params.pbiId, request.params.key);
       return { result: {} };
 
     default:
