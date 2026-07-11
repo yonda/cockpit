@@ -76,8 +76,13 @@ function handleLine(
   }
 
   if (request.method.startsWith("pbi.")) {
-    void handlePbiRequest(request as PbiRunnerRequest, deps.pbi).then((r) =>
-      respond(socket, { id: request.id, ...r }),
+    void handlePbiRequest(request as PbiRunnerRequest, deps.pbi).then(
+      (r) => respond(socket, { id: request.id, ...r }),
+      (err) =>
+        respond(socket, {
+          id: request.id,
+          error: { message: err instanceof Error ? err.message : String(err) },
+        }),
     );
     return;
   }

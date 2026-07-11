@@ -1,5 +1,5 @@
 // runner/pbi-server.ts
-import type { PbiRunnerRequest } from "../lib/pbi/types";
+import { canPbiTransition, type PbiRunnerRequest } from "../lib/pbi/types";
 import type { PbiStore } from "./pbi-store";
 import {
   approveDecomposition,
@@ -22,6 +22,20 @@ export type PbiServerDeps = {
   lifecycle: LifecycleDeps;
   exec: PbiExecutorDeps;
 };
+
+/**
+ * fire-and-forget で起動した非同期処理が reject した際に、プロセスを落とさず
+ * PBI を failed へ遷移させて pbi.updated イベントで可視化する。
+ */
+function failPbiSafely(deps: PbiServerDeps, pbiId: string, err: unknown): void {
+  const pbi = deps.pbiStore.get(pbiId);
+  const message = err instanceof Error ? err.message : String(err);
+  if (pbi && canPbiTransition(pbi.status, "failed")) {
+    deps.pbiStore.transition(pbiId, "failed", { error: message });
+  } else {
+    console.error(`[pbi] unhandled error for ${pbiId}: ${message}`);
+  }
+}
 
 export async function handlePbiRequest(
   request: PbiRunnerRequest,
@@ -50,14 +64,14 @@ export async function handlePbiRequest(
         deps.lifecycle,
         pbi.id,
         new AbortController().signal,
-      );
+      ).catch((err) => failPbiSafely(deps, pbi.id, err));
       return { result: { pbi } };
     }
 
     case "pbi.approve":
-      void approveDecomposition(deps.lifecycle, request.params.pbiId).then(
-        () => dispatchReady(deps.exec, request.params.pbiId),
-      );
+      void approveDecomposition(deps.lifecycle, request.params.pbiId)
+        .then(() => dispatchReady(deps.exec, request.params.pbiId))
+        .catch((err) => failPbiSafely(deps, request.params.pbiId, err));
       return { result: {} };
 
     case "pbi.revise":
@@ -66,7 +80,7 @@ export async function handlePbiRequest(
         request.params.pbiId,
         request.params.feedback,
         new AbortController().signal,
-      );
+      ).catch((err) => failPbiSafely(deps, request.params.pbiId, err));
       return { result: {} };
 
     case "pbi.reject":

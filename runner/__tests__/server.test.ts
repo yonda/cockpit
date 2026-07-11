@@ -150,6 +150,28 @@ describe("runner socket protocol", () => {
     await expect(pending).resolves.toEqual({ kind: "allow" });
   });
 
+  it("responds with an error (not a hang/crash) when a pbi.* method rejects at the handlePbiRequest layer", async () => {
+    // pbi.pause on 未知の pbiId は PbiStore.mustGet の同期 throw により
+    // handlePbiRequest の Promise を reject させる。Fix 2 前は handleLine の
+    // `void handlePbiRequest(...).then((r) => respond(...))` に onRejected が
+    // 無く、unhandledRejection でデーモンごと落ちた上、クライアントは
+    // 5s タイムアウトまで応答を待たされていた。
+    const { callRunner } = await client();
+    let unhandled: unknown;
+    const onUnhandledRejection = (err: unknown) => {
+      unhandled = err;
+    };
+    process.on("unhandledRejection", onUnhandledRejection);
+    try {
+      await expect(
+        callRunner("pbi.pause", { pbiId: "pbi-does-not-exist" }),
+      ).rejects.toThrow(/unknown pbi/);
+    } finally {
+      process.off("unhandledRejection", onUnhandledRejection);
+    }
+    expect(unhandled).toBeUndefined();
+  });
+
   it("rejects job.respond with an invalid response shape", async () => {
     const { callRunner } = await client();
     const job = store.create({
