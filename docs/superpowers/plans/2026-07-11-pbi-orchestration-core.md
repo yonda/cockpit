@@ -15,6 +15,8 @@
 - 実行環境: ローカル Mac、Claude Code サブスクリプション内。隔離環境・クラウドは使わない。
 - 境界ルール（Launch Pad 既存規約の継承）: runner は Next.js コードを import しない。Next と共有するのは型定義（`lib/`）とソケットプロトコルのみ。
 - ジョブモデル再利用: 個々の実装タスクは既存の `runIssueJob`（1 Issue → 1 draft PR）をそのまま使う。PBI コアは「複数 Launch Pad ジョブのオーケストレーション層」であり、実装エージェントの中身には手を入れない。
+- **worktree 作成方式（現実装に厳密に合わせる）**: 本計画が worktree を作る箇所（Task 5 の分解 scratch worktree 等）は、Launch Pad の現 `ensureWorktree` と同じ self-contained 方式に揃える。すなわち `git wt` は**使わない** —  plain `git worktree add <path> [-b <branch>] origin/main` + 明示的 `pnpm install` を worktree 内で実行し、配置は `../{repo}-wt/{branch}`（`dirname`/`basename` で算出）。理由: `git wt` はユーザーのグローバル `wt.hook`(npm ci) を継承し pnpm リポジトリで失敗するため、runner はデーモンとして対話用フックに依存しない（引き継ぎ C、2026-07-10 に workflow.ts で変更・マージ済み）。
+- **closing keyword ハザード（マージ検知の前提条件）**: PBI 実行ループは「sub-issue の PR がマージされたら sub-issue をクローズして次へ」を回す（Task 9）。したがって実装エージェントが**コミットメッセージにも PR 本文にも `closes #n` 等の closing keyword を書いてはならない**（push だけで sub-issue が早期クローズし、マージ検知が壊れる）。sub-issue のクローズは runner のマージ検知（`GitHubClient.closeIssue`）が担う。共有 `buildPrompt`（`runner/workflow.ts`）は 2026-07-11 時点で「PR 本文に closes #n」と指示したままなので、**PBI 実行前にこの指示を除去する前提**（Launch Pad 側 follow-up。本計画の Task 8 実行時に未修正なら合わせて直す）。
 - マージ検知は runner からの `gh` ポーリング（webhook は使わない）。ポーリング間隔は既定 90 秒、`PBI_POLL_INTERVAL_MS` で上書き可能。
 - 「次へ進め」の自動トリガーは PR マージ検知のみ。それ以外の発射（分解のやり直し、失敗リトライ、レビューコメント対応）はすべて人間の明示操作を待つ。
 - 決定論とテスト容易性: 外部 I/O（`gh`、エージェント実行、時計）はすべて injectable インターフェース越しに呼ぶ。ユニットテストはフェイクを注入し、`Date`・`setInterval`・ネットワークに依存しない。
@@ -1227,7 +1229,7 @@ Expected: FAIL — "Cannot find module '../decompose'"
 ```typescript
 // runner/decompose.ts
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import type { AgentExecutor } from "./executor";
 import type { CommandRunner } from "./exec";
 import type { GitHubClient } from "./github";
@@ -1285,27 +1287,23 @@ async function ensureScratchWorktree(
   deps: DecomposeDeps,
   issueNumber: number,
 ): Promise<{ cwd: string; branch: string }> {
+  // 現 Launch Pad の ensureWorktree と同じ self-contained 方式（git wt は使わない）。
+  // 分解は読み取り解析なので commit/PR はしないが、コードベースを読むための作業
+  // コピーとして worktree を用意する。配置は ../{repo}-wt/{branch}。
   const branch = `decomp/${issueNumber}`;
+  const wtRoot = join(dirname(deps.repoDir), `${basename(deps.repoDir)}-wt`);
+  const worktreePath = join(wtRoot, branch);
   await deps.commands.run("git", ["fetch", "origin", "main"], {
     cwd: deps.repoDir,
   });
-  await deps.commands.run("git", ["wt", branch, "origin/main"], {
-    cwd: deps.repoDir,
-  });
-  const { stdout } = await deps.commands.run(
+  await deps.commands.run(
     "git",
-    ["worktree", "list", "--porcelain"],
+    ["worktree", "add", worktreePath, "-b", branch, "origin/main"],
     { cwd: deps.repoDir },
   );
-  let current: string | null = null;
-  for (const line of stdout.split("\n")) {
-    if (line.startsWith("worktree ")) current = line.slice("worktree ".length);
-    if (line === `branch refs/heads/${branch}` && current) {
-      return { cwd: current, branch };
-    }
-  }
-  // フェイク環境（テスト）では git を呼ばず scratchDir を直接使う
-  return { cwd: deps.scratchDir, branch };
+  // 分解は解析専用だが、tsconfig 解決等で node_modules が要ることがあるため入れる。
+  await deps.commands.run("pnpm", ["install"], { cwd: worktreePath });
+  return { cwd: worktreePath, branch };
 }
 
 async function removeWorktree(deps: DecomposeDeps, cwd: string): Promise<void> {
@@ -1519,7 +1517,7 @@ export async function materializeSubIssues(
 Run: `pnpm vitest run runner/__tests__/pbi-subissues.test.ts`
 Expected: PASS
 
-Note: `records[0].branch` の期待値 `feature/100-t` は、タイトル「型を作る」が非 ASCII で slug が空になり `buildBranchName` のフォールバック `issue` … ではなく、テストのタイトルは「型を作る」なので実際には `feature/100-issue` になる。**Step 1 のテストを実装前に修正**: `expect(records[0].branch).toBe("feature/100-issue")` とする（`buildBranchName` の非 ASCII フォールバック挙動、Task 1 の `pbi-types` ではなく既存 `workflow.test.ts` で確認済み）。
+Note: `records[0].branch` の期待値は `buildBranchName` の非 ASCII フォールバック挙動に依存する。タイトル「型を作る」は slug が空になり、現行実装では `feature/100-issue`（フォールバック `issue`）。**Step 1 のテストを実装前に、その時点の `buildBranchName` が実際に返す値に合わせて修正すること**。dogfood follow-up（closing keyword ハザードと同じ Launch Pad 課題群の B4）で「slug が空/退化なら `feature/{n}`」に変わっている場合は `feature/100` を期待値にする。挙動は既存 `runner/__tests__/workflow.test.ts` の `buildBranchName` テストで確認できる。
 
 - [ ] **Step 5: Commit**
 
