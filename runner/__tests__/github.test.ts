@@ -67,6 +67,66 @@ describe("RealGitHubClient.createSubIssue", () => {
   });
 });
 
+describe("RealGitHubClient.fetchIssue", () => {
+  it("fetches issue with title and body", async () => {
+    const commands = new FakeCommands();
+    commands.responses.push({
+      stdout: JSON.stringify({ title: "T", body: "B" }),
+      stderr: "",
+    });
+    const gh = new RealGitHubClient(commands, "/repo");
+    const res = await gh.fetchIssue("yonda/cockpit", 42);
+    expect(res).toEqual({ title: "T", body: "B" });
+    expect(commands.calls[0].args).toContain("issue");
+    expect(commands.calls[0].args).toContain("view");
+    expect(commands.calls[0].args).toContain("42");
+    expect(commands.calls[0].args).toContain("--repo");
+    expect(commands.calls[0].args).toContain("yonda/cockpit");
+    expect(commands.calls[0].args).toContain("--json");
+    expect(commands.calls[0].args).toContain("title,body");
+  });
+
+  it("returns empty string when body is null", async () => {
+    const commands = new FakeCommands();
+    commands.responses.push({
+      stdout: JSON.stringify({ title: "T", body: null }),
+      stderr: "",
+    });
+    const gh = new RealGitHubClient(commands, "/repo");
+    const res = await gh.fetchIssue("yonda/cockpit", 42);
+    expect(res).toEqual({ title: "T", body: "" });
+  });
+});
+
+describe("RealGitHubClient.updateIssueBody", () => {
+  it("updates issue body with PATCH request", async () => {
+    const commands = new FakeCommands();
+    commands.responses.push({ stdout: "", stderr: "" });
+    const gh = new RealGitHubClient(commands, "/repo");
+    await gh.updateIssueBody("yonda/cockpit", 101, "new body");
+    expect(commands.calls[0].args).toContain("api");
+    expect(commands.calls[0].args).toContain("--method");
+    expect(commands.calls[0].args).toContain("PATCH");
+    expect(commands.calls[0].args).toContain("/repos/yonda/cockpit/issues/101");
+    const argsStr = commands.calls[0].args.join(" ");
+    expect(argsStr).toContain("body=new body");
+  });
+});
+
+describe("RealGitHubClient.closeIssue", () => {
+  it("closes issue with correct command args", async () => {
+    const commands = new FakeCommands();
+    commands.responses.push({ stdout: "", stderr: "" });
+    const gh = new RealGitHubClient(commands, "/repo");
+    await gh.closeIssue("yonda/cockpit", 101);
+    expect(commands.calls[0].args).toContain("issue");
+    expect(commands.calls[0].args).toContain("close");
+    expect(commands.calls[0].args).toContain("101");
+    expect(commands.calls[0].args).toContain("--repo");
+    expect(commands.calls[0].args).toContain("yonda/cockpit");
+  });
+});
+
 describe("RealGitHubClient.prStateForBranch", () => {
   const gh = (commands: CommandRunner) =>
     new RealGitHubClient(commands, "/repo");
@@ -113,6 +173,24 @@ describe("RealGitHubClient.prStateForBranch", () => {
       kind: "open",
       url: "https://github.com/yonda/cockpit/pull/9",
       reviewCommentCount: 3,
+    });
+  });
+
+  it("maps a closed PR", async () => {
+    const commands = new FakeCommands();
+    commands.responses.push({
+      stdout: JSON.stringify([
+        {
+          url: "https://github.com/yonda/cockpit/pull/9",
+          state: "CLOSED",
+          reviewThreads: { totalCount: 0 },
+        },
+      ]),
+      stderr: "",
+    });
+    expect(await gh(commands).prStateForBranch("r", "feature/1-x")).toEqual({
+      kind: "closed",
+      url: "https://github.com/yonda/cockpit/pull/9",
     });
   });
 });
