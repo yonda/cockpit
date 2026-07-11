@@ -1,8 +1,8 @@
 import Image from "next/image";
 import { AlertTriangle, Check, CircleDashed, MessageSquare, ThumbsUp, X } from "lucide-react";
 import { Badge } from "./Badge";
+import { RelativeTime } from "./RelativeTime";
 import { ReviewerRow } from "./ReviewerRow";
-import { relativeTime } from "@/lib/format/relativeTime";
 import type { PullRequestCard as PullRequestCardType } from "@/lib/github/types";
 
 export function PullRequestCard({ pr }: { pr: PullRequestCardType }) {
@@ -45,7 +45,7 @@ export function PullRequestCard({ pr }: { pr: PullRequestCardType }) {
           ) : null}
           <span>@{pr.authorLogin}</span>
         </span>
-        <span className="text-[var(--ink-muted)]">{relativeTime(pr.updatedAt)}</span>
+        <RelativeTime iso={pr.updatedAt} className="text-[var(--ink-muted)]" />
         <span className="text-[var(--signal-ok)]">+{pr.additions}</span>
         <span className="text-[var(--signal-alert)]">−{pr.deletions}</span>
       </div>
