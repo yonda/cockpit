@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { basename, dirname, join } from "node:path";
 import type { PendingInput } from "../lib/jobs/types";
 import type { AgentExecutor, CommandRunner } from "./executor";
 import type { InputBroker } from "./input-broker";
@@ -69,14 +70,34 @@ async function ensureWorktree(
   const existing = await list();
   if (existing) return existing; // 再発射・リトライは既存 worktree を再利用
 
-  // git wt は未存在なら origin ベースで作成する (グローバル運用規約のツール)。
-  // 起点を明示的に origin/main にする: ローカル main は worktree 運用では
-  // 更新されない前提のため、直前の `git fetch origin main` を意味あるものにする。
-  await deps.commands.run("git", ["wt", branch, "origin/main"], {
-    cwd: deps.repoDir,
-  });
+  // plain `git worktree add` で作る。`git wt` はユーザーのグローバル wt.hook
+  // (`npm ci`) を継承し、pnpm リポジトリでは lockfile 不一致で失敗する。runner は
+  // デーモンなので対話用フックに依存せず自己完結させる。配置は git-wt と同じ
+  // ../{repo}-wt/{branch}。起点は origin/main を明示 (ローカル main は worktree
+  // 運用では更新されない前提なので、直前の `git fetch origin main` を活かす)。
+  const wtRoot = join(dirname(deps.repoDir), `${basename(deps.repoDir)}-wt`);
+  const worktreePath = join(wtRoot, branch);
+
+  const branchExists = await deps.commands
+    .run("git", ["show-ref", "--verify", "--quiet", `refs/heads/${branch}`], {
+      cwd: deps.repoDir,
+    })
+    .then(() => true)
+    .catch(() => false);
+
+  const addArgs = branchExists
+    ? ["worktree", "add", worktreePath, branch]
+    : ["worktree", "add", worktreePath, "-b", branch, "origin/main"];
+  await deps.commands.run("git", addArgs, { cwd: deps.repoDir });
+
+  // node_modules は worktree にコピーされないので依存を入れる (git-wt の hook
+  // が担っていた役割を明示的に肩代わり)。
+  await deps.commands.run("pnpm", ["install"], { cwd: worktreePath });
+
   const created = await list();
-  if (!created) throw new Error(`worktree not found after git wt ${branch}`);
+  if (!created) {
+    throw new Error(`worktree not found after creating ${branch}`);
+  }
   return created;
 }
 

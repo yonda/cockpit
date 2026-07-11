@@ -31,8 +31,10 @@ class FakeCommands implements CommandRunner {
   calls: string[] = [];
   /** `gh pr list` が返す URL。null なら空配列を返す */
   prUrl: string | null = "https://github.com/yonda/cockpit/pull/9";
-  /** 作成済み worktree のセット (git wt が呼ばれたブランチ) */
+  /** 作成済み worktree のセット (git worktree add が呼ばれたブランチ) */
   createdWorktrees = new Set<string>();
+  /** show-ref が成功扱いするブランチ (既存ブランチのシミュレート) */
+  existingBranches = new Set<string>();
 
   async run(cmd: string, args: string[], _opts: { cwd: string }) {
     const line = [cmd, ...args].join(" ");
@@ -49,13 +51,21 @@ class FakeCommands implements CommandRunner {
         stderr: "",
       };
     }
-    if (cmd === "git" && args[0] === "wt") {
-      // git wt でブランチを作成したことを記録
-      this.createdWorktrees.add(args[1]);
+    if (cmd === "git" && args[0] === "show-ref") {
+      // refs/heads/<branch> は args の末尾
+      const ref = args[args.length - 1];
+      if (this.existingBranches.has(ref.replace("refs/heads/", ""))) {
+        return { stdout: "", stderr: "" };
+      }
+      throw new Error(`show-ref: ${ref} not found`); // 未存在は非ゼロ終了を模す
+    }
+    if (cmd === "git" && args[0] === "worktree" && args[1] === "add") {
+      // git worktree add <path> ... の path からブランチを記録
+      this.createdWorktrees.add("feature/1-test-issue");
       return { stdout: "", stderr: "" };
     }
     if (cmd === "git" && args[0] === "worktree") {
-      // git wt で作成されたブランチだけ返す
+      // 作成済みブランチだけ list に出す
       if (this.createdWorktrees.has("feature/1-test-issue")) {
         return {
           stdout: `worktree /tmp/cockpit-wt/feature/1-test-issue\nbranch refs/heads/feature/1-test-issue\n`,
@@ -101,7 +111,7 @@ function makeDeps(overrides: Partial<WorkflowDeps> = {}): WorkflowDeps & {
     broker: new InputBroker(),
     commands: new FakeCommands(),
     executor: new FakeExecutor(),
-    repoDir: "/tmp/repo",
+    repoDir: "/tmp/cockpit",
     ...overrides,
   } as WorkflowDeps & { commands: FakeCommands; executor: FakeExecutor };
 }
@@ -135,8 +145,35 @@ describe("runIssueJob", () => {
     expect(final.prUrl).toBe("https://github.com/yonda/cockpit/pull/9");
     expect(final.worktreePath).toBe("/tmp/cockpit-wt/feature/1-test-issue");
     expect(deps.commands.calls).toContain("git fetch origin main");
+    // 新規ブランチは origin/main 起点で plain git worktree add され、依存を入れる
+    expect(
+      deps.commands.calls.some((c) =>
+        c.startsWith("git worktree add") &&
+        c.includes("feature/1-test-issue") &&
+        c.includes("origin/main"),
+      ),
+    ).toBe(true);
+    expect(deps.commands.calls).toContain("pnpm install");
+    // git wt (グローバル hook 継承) は使わない
+    expect(deps.commands.calls.some((c) => c.startsWith("git wt"))).toBe(false);
+  });
+
+  it("reuses an existing branch without an origin/main start-point", async () => {
+    const deps = makeDeps();
+    deps.commands.existingBranches.add("feature/1-test-issue");
+    const job = store.create({
+      repo: "yonda/cockpit",
+      issueNumber: 1,
+      issueTitle: "test issue",
+      branch: "feature/1-test-issue",
+    });
+
+    await runIssueJob(deps, job.id, new AbortController().signal);
+
+    expect(store.get(job.id)!.status).toBe("done");
+    // 既存ブランチは起点指定なしで add する (origin/main を上書きしない)
     expect(deps.commands.calls).toContain(
-      "git wt feature/1-test-issue origin/main",
+      "git worktree add /tmp/cockpit-wt/feature/1-test-issue feature/1-test-issue",
     );
   });
 
