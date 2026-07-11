@@ -39,7 +39,8 @@ function buildPrompt(args: {
     "## 進め方",
     `- このディレクトリは Issue 専用の git worktree です (ブランチ: ${args.branch})`,
     "- 実装が終わったらテスト・lint を通し、変更をコミットして origin に push してください",
-    `- 最後に \`gh pr create --draft\` で draft PR を作成してください (本文に "closes #${args.issueNumber}" を含める)`,
+    `- 最後に \`gh pr create --draft\` で draft PR を作成してください`,
+    `- コミットメッセージにも PR 本文にも closing keyword (\`close\`/\`fixes\`/\`resolves\` などに続けて番号) を書かないこと。Issue のクローズはマージ後に人間または上位のマージ検知が行います (push だけで Issue が早期クローズすると、上位のマージ検知が壊れるため)。関連付けが必要なら PR 本文に "refs #${args.issueNumber}" と書いてください`,
     "- draft PR の作成まで完了したら終了してください",
   ].join("\n");
 }
@@ -130,7 +131,8 @@ export async function runIssueJob(
     let prompt: string;
     if (isResume) {
       prompt =
-        "runner プロセスの再起動から復帰しました。直前の作業状態 (git status とここまでの会話) を確認し、Issue の実装を続行してください。完了条件は変わらず draft PR の作成までです。";
+        "runner プロセスの再起動から復帰しました。直前の作業状態 (git status とここまでの会話) を確認し、Issue の実装を続行してください。完了条件は変わらず draft PR の作成までです。" +
+        "なお、コミットメッセージにも PR 本文にも closing keyword (close/fixes/resolves などに続けて番号) を書かないでください。Issue のクローズはマージ後に人間または上位のマージ検知が行います。関連付けが必要なら PR 本文に refs で参照してください。";
     } else {
       const { stdout } = await deps.commands.run(
         "gh",

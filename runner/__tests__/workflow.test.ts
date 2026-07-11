@@ -177,6 +177,27 @@ describe("runIssueJob", () => {
     );
   });
 
+  it("does not instruct closing keywords so the issue stays open until merge", async () => {
+    const deps = makeDeps();
+    const job = store.create({
+      repo: "yonda/cockpit",
+      issueNumber: 1,
+      issueTitle: "test issue",
+      branch: "feature/1-test-issue",
+    });
+
+    await runIssueJob(deps, job.id, new AbortController().signal);
+
+    const prompt = deps.executor.lastOpts!.prompt;
+    // GitHub の closing keyword を一切書かせない（push だけで Issue が早期
+    // クローズするのを防ぐ）。closes だけでなく fixes/resolves 等の全系統を検査。
+    expect(prompt).not.toMatch(
+      /\b(close[sd]?|fix(e[sd])?|resolve[sd]?)\s*#\d/i,
+    );
+    // 代わりに、関連付けは refs で行う旨（クローズをマージ後/人間に委ねる）を明示している
+    expect(prompt).toMatch(/refs #\d/);
+  });
+
   it("transitions to waiting_input and resumes on respond", async () => {
     const deps = makeDeps();
     deps.executor.askPermission = true;
