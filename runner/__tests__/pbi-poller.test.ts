@@ -1,0 +1,137 @@
+// runner/__tests__/pbi-poller.test.ts
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { GitHubClient, PrState } from "../github";
+import type { SubTaskRecord } from "../../lib/pbi/types";
+import { JobStore } from "../store";
+import { PbiStore } from "../pbi-store";
+import { Scheduler } from "../scheduler";
+import { InputBroker } from "../input-broker";
+import { pollOnce } from "../pbi-poller";
+import type { PbiExecutorDeps } from "../pbi-executor";
+
+let jobsDir: string;
+let pbisDir: string;
+let pbiStore: PbiStore;
+let exec: PbiExecutorDeps;
+
+const rec = (over: Partial<SubTaskRecord>): SubTaskRecord => ({
+  key: "t1",
+  title: "t",
+  goal: "",
+  deliverable: "",
+  acceptanceCriteria: [],
+  dependsOn: [],
+  state: "in_review",
+  issueNumber: 100,
+  jobId: "job-1",
+  branch: "feature/100-t",
+  prUrl: "https://github.com/yonda/cockpit/pull/9",
+  ...over,
+});
+
+class FakeGitHub implements GitHubClient {
+  closed: number[] = [];
+  prStates: Record<string, PrState> = {};
+  async fetchIssue() {
+    return { title: "", body: "" };
+  }
+  async createSubIssue() {
+    return { number: 0, url: "" };
+  }
+  async updateIssueBody() {}
+  async closeIssue(_repo: string, number: number) {
+    this.closed.push(number);
+  }
+  async prStateForBranch(_repo: string, branch: string): Promise<PrState> {
+    return this.prStates[branch] ?? { kind: "none" };
+  }
+}
+
+const executing = () => {
+  const pbi = pbiStore.create({ repo: "yonda/cockpit", issueNumber: 42, title: "P" });
+  pbiStore.transition(pbi.id, "awaiting_approval");
+  pbiStore.transition(pbi.id, "executing");
+  return pbi.id;
+};
+
+beforeEach(() => {
+  jobsDir = mkdtempSync(join(tmpdir(), "jobs-"));
+  pbisDir = mkdtempSync(join(tmpdir(), "pbis-"));
+  const jobStore = new JobStore(jobsDir);
+  jobStore.loadAll();
+  pbiStore = new PbiStore(pbisDir);
+  pbiStore.loadAll();
+  const scheduler = new Scheduler(
+    {
+      store: jobStore,
+      broker: new InputBroker(),
+      commands: { run: async () => ({ stdout: "", stderr: "" }) },
+      executor: { run: async () => ({ ok: true }) },
+      repoDir: "/repo",
+    },
+    { runJob: async (deps, jobId) => { deps.store.transition(jobId, "running"); } },
+  );
+  exec = { pbiStore, jobStore, scheduler };
+});
+afterEach(() => {
+  rmSync(jobsDir, { recursive: true, force: true });
+  rmSync(pbisDir, { recursive: true, force: true });
+});
+
+describe("pollOnce", () => {
+  it("closes the sub-issue and completes the PBI when the only PR is merged", async () => {
+    const pbiId = executing();
+    pbiStore.setSubTasks(pbiId, [rec({ key: "t1", branch: "feature/100-t" })]);
+    const github = new FakeGitHub();
+    github.prStates["feature/100-t"] = {
+      kind: "merged",
+      url: "https://github.com/yonda/cockpit/pull/9",
+    };
+
+    await pollOnce({ pbiStore, github, exec });
+
+    const after = pbiStore.get(pbiId)!;
+    expect(after.subTasks[0].state).toBe("merged");
+    expect(github.closed).toEqual([100]);
+    expect(after.status).toBe("completed");
+  });
+
+  it("escalates pr_closed_unmerged when the PR was closed without merge", async () => {
+    const pbiId = executing();
+    pbiStore.setSubTasks(pbiId, [rec({ key: "t1", branch: "feature/100-t" })]);
+    const github = new FakeGitHub();
+    github.prStates["feature/100-t"] = {
+      kind: "closed",
+      url: "https://github.com/yonda/cockpit/pull/9",
+    };
+
+    await pollOnce({ pbiStore, github, exec });
+
+    const after = pbiStore.get(pbiId)!;
+    expect(after.subTasks[0].state).toBe("failed");
+    expect(after.escalations.map((e) => e.kind)).toContain("pr_closed_unmerged");
+  });
+
+  it("escalates review_comments once while the PR stays open", async () => {
+    const pbiId = executing();
+    pbiStore.setSubTasks(pbiId, [rec({ key: "t1", branch: "feature/100-t" })]);
+    const github = new FakeGitHub();
+    github.prStates["feature/100-t"] = {
+      kind: "open",
+      url: "https://github.com/yonda/cockpit/pull/9",
+      reviewCommentCount: 2,
+    };
+
+    await pollOnce({ pbiStore, github, exec });
+    await pollOnce({ pbiStore, github, exec }); // 2 回目は二重通知しない
+
+    const escs = pbiStore
+      .get(pbiId)!
+      .escalations.filter((e) => e.kind === "review_comments");
+    expect(escs).toHaveLength(1);
+    expect(pbiStore.get(pbiId)!.subTasks[0].state).toBe("in_review");
+  });
+});
