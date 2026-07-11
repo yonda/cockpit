@@ -10,33 +10,19 @@ import type {
   ExecutorResult,
   ExecutorRunOpts,
 } from "./executor";
+import { evaluateToolUse } from "./permission-policy";
 
-// 定型ワークフローに必要なツールは事前許可。ここに無い Bash・外部送信系と
-// AskUserQuestion が canUseTool に落ちて cockpit へ転送される。
+// 許可判定は permission-policy (evaluateToolUse) に集約した。canUseTool が
+// default-allow で判定し、危険な操作 (保護ブランチへの push・force-push・
+// gh pr merge・外部送信等) のみ cockpit へ転送する。かつて存在した
+// allowedTools の事前許可リストは、policy と二重管理になるため撤廃した。
 //
-// Edit/Write は意図的に含めない: allowedTools の許可はパス無制限で、
-// permissionMode: "acceptEdits" が持つ cwd (worktree) スコープを上書きしてしまう。
-// そのため許可すると worktree 外への書き込みが無警告で行える。
-// ここから外しておけば worktree 内の編集は acceptEdits が引き続き自動承認し、
-// worktree 外への書き込みは canUseTool 経由で cockpit に転送される。
-const ALLOWED_TOOLS = [
-  "Read",
-  "Glob",
-  "Grep",
-  "TodoWrite",
-  "Task",
-  // git push を含む (draft PR 作成に必要)。push 等の外部副作用は draft PR 経由でレビューする
-  // トレードオフを受け入れている。
-  "Bash(git:*)",
-  "Bash(gh issue view:*)",
-  "Bash(gh pr create --draft:*)",
-  "Bash(gh pr list:*)",
-  // pnpm はこのプロジェクトのビルド/テスト tooling そのもの。install/test/lint/build/
-  // vitest だけに絞ると exec tsc / run typecheck / prettier 等が canUseTool に落ちて
-  // 許可プロンプトが洪水になる。実装ジョブは隔離 worktree 内で動くので pnpm を丸ごと
-  // 許可し、リスクは worktree に収める。
-  "Bash(pnpm:*)",
-];
+// Edit/Write を allowedTools で事前許可してはならない (今後も追加禁止):
+// allowedTools の許可はパス無制限で、permissionMode: "acceptEdits" が持つ
+// cwd (worktree) スコープを上書きしてしまい、worktree 外への書き込みが
+// 無警告で行えるようになる。現在の構成では worktree 内の編集は acceptEdits が
+// 自動承認し、worktree 外への書き込みは canUseTool に落ちて permission-policy が
+// パス判定のうえ escalate (cockpit へ転送) する。
 
 // headless 実装ジョブでは使わせないツール。deny rules は canUseTool より前に評価される
 // ため、プロンプトを出さずに拒否される。Skill: グローバル CLAUDE.md の PR ワークフローを
@@ -74,6 +60,33 @@ export function toPermissionResult(
   return { behavior: "deny", message: "unrecognized response shape" };
 }
 
+// canUseTool の実体。テスト可能なようにファクトリとして切り出している。
+// permission-policy で判定し、allow なら requestInput を経由せず即許可、
+// escalate なら従来どおり cockpit (hooks.requestInput) へ転送する。
+// AskUserQuestion は policy 側で必ず escalate になり、kind: "question" で転送される。
+export function buildCanUseTool(
+  hooks: ExecutorHooks,
+  cwd: string,
+): (
+  toolName: string,
+  input: Record<string, unknown>,
+) => Promise<PermissionResult> {
+  return async (toolName, input) => {
+    const decision = evaluateToolUse(toolName, input, { worktreeDir: cwd });
+    if (decision.decision === "allow") {
+      return { behavior: "allow", updatedInput: input };
+    }
+    const response = await hooks.requestInput({
+      id: "", // workflow 側で採番される
+      kind: toolName === "AskUserQuestion" ? "question" : "permission",
+      toolName,
+      input,
+      createdAt: "",
+    });
+    return toPermissionResult(response, input);
+  };
+}
+
 function extractAssistantText(message: SDKMessage): string | null {
   if (message.type !== "assistant") return null;
   const content = message.message.content;
@@ -100,21 +113,11 @@ export class SdkExecutor implements AgentExecutor {
         options: {
           cwd: opts.cwd,
           permissionMode: "acceptEdits",
-          allowedTools: ALLOWED_TOOLS,
           disallowedTools: DISALLOWED_TOOLS,
           resume: opts.resumeSessionId ?? undefined,
           // 実際の CanUseTool は (toolName, input, { signal, toolUseID, ... })
           // の3引数。3番目の control メタデータはここでは使わない。
-          canUseTool: async (toolName, input) => {
-            const response = await hooks.requestInput({
-              id: "", // workflow 側で採番される
-              kind: toolName === "AskUserQuestion" ? "question" : "permission",
-              toolName,
-              input,
-              createdAt: "",
-            });
-            return toPermissionResult(response, input);
-          },
+          canUseTool: buildCanUseTool(hooks, opts.cwd),
         },
       });
 
