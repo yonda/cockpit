@@ -1,5 +1,5 @@
 import { runDecomposition, type DecomposeDeps } from "./decompose";
-import { materializeSubIssues } from "./pbi-subissues";
+import { materializeSubIssues, subTaskBranch } from "./pbi-subissues";
 import { validateDependencies } from "./pbi-graph";
 import { subIssueBody } from "./github";
 import type { GitHubClient } from "./github";
@@ -118,7 +118,7 @@ async function reviseSubIssues(
         state: "pending",
         issueNumber: number,
         jobId: null,
-        branch: `feature/${number}-${task.key}`,
+        branch: subTaskBranch(number, task.title),
         prUrl: null,
       });
     }
@@ -158,6 +158,11 @@ export async function approveDecomposition(
 ): Promise<void> {
   const pbi = deps.store.get(pbiId);
   if (!pbi) throw new Error(`unknown pbi: ${pbiId}`);
+  if (pbi.status !== "awaiting_approval") {
+    throw new Error(
+      `cannot approve pbi in status ${pbi.status} (${pbiId})`,
+    );
+  }
   for (const t of pbi.subTasks) {
     if (t.issueNumber != null) {
       await deps.github.updateIssueBody(

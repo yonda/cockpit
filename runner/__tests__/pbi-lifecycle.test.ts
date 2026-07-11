@@ -8,6 +8,7 @@ import type { SubTask } from "../../lib/pbi/types";
 import { PbiStore } from "../pbi-store";
 import {
   approveDecomposition,
+  rejectDecomposition,
   reviseDecomposition,
   startDecomposition,
   type LifecycleDeps,
@@ -150,5 +151,40 @@ describe("reviseDecomposition", () => {
     expect(after.status).toBe("awaiting_approval");
     expect(after.subTasks).toHaveLength(2);
     expect(after.decompositionAttempts).toBe(2);
+  });
+
+  it("fails PBI when decomposition exceeds MAX_DECOMPOSITION_ATTEMPTS", async () => {
+    const github = new FakeGitHub();
+    const deps = makeDeps(new WritingExecutor(tasks), github);
+    const pbi = store.create({ repo: "r", issueNumber: 42, title: "PBI" });
+    // First decomposition brings status to awaiting_approval with decompositionAttempts=1
+    await startDecomposition(deps, pbi.id, new AbortController().signal);
+    // Fast-forward decompositionAttempts to the max
+    store.update(pbi.id, { decompositionAttempts: 5 });
+
+    // Now revise - will increment to 6, exceeding MAX (5)
+    await reviseDecomposition(
+      deps,
+      pbi.id,
+      "t1 をさらに分割して",
+      new AbortController().signal,
+    );
+
+    const after = store.get(pbi.id)!;
+    expect(after.status).toBe("failed");
+    expect(after.error).toMatch(/上限/);
+  });
+});
+
+describe("rejectDecomposition", () => {
+  it("transitions status to cancelled", async () => {
+    const github = new FakeGitHub();
+    const deps = makeDeps(new WritingExecutor(tasks), github);
+    const pbi = store.create({ repo: "r", issueNumber: 42, title: "PBI" });
+    await startDecomposition(deps, pbi.id, new AbortController().signal);
+
+    await rejectDecomposition(deps, pbi.id);
+
+    expect(store.get(pbi.id)!.status).toBe("cancelled");
   });
 });
