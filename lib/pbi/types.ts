@@ -137,3 +137,35 @@ export type PbiJob = {
   createdAt: string;
   updatedAt: string;
 };
+
+// ---- ソケットプロトコル (PBI) ---------------------------------------------
+
+export type PbiRunnerRequest =
+  | { id: string; method: "pbi.list"; params: Record<string, never> }
+  | {
+      id: string;
+      method: "pbi.fire";
+      params: { repo: string; issueNumber: number; title: string };
+    }
+  | { id: string; method: "pbi.approve"; params: { pbiId: string } }
+  | {
+      id: string;
+      method: "pbi.revise";
+      params: { pbiId: string; feedback: string };
+    }
+  | { id: string; method: "pbi.reject"; params: { pbiId: string } }
+  | { id: string; method: "pbi.pause"; params: { pbiId: string } }
+  | { id: string; method: "pbi.resume"; params: { pbiId: string } }
+  | {
+      id: string;
+      method: "pbi.retryTask";
+      params: { pbiId: string; key: string };
+    }
+  | {
+      id: string;
+      method: "pbi.skipTask";
+      params: { pbiId: string; key: string };
+    }
+  | { id: string; method: "pbi.cancel"; params: { pbiId: string } };
+
+export type PbiRunnerEvent = { event: "pbi.updated"; data: PbiJob };

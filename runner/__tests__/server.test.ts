@@ -4,7 +4,10 @@ import { join } from "node:path";
 import type { Server } from "node:net";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Job, RunnerEvent } from "../../lib/jobs/types";
+import type { PbiRunnerEvent } from "../../lib/pbi/types";
 import { InputBroker } from "../input-broker";
+import { PbiStore } from "../pbi-store";
+import type { PbiServerDeps } from "../pbi-server";
 import { Scheduler } from "../scheduler";
 import { startRunnerServer } from "../server";
 import { JobStore } from "../store";
@@ -15,6 +18,7 @@ let store: JobStore;
 let server: Server;
 let scheduler: Scheduler;
 let broker: InputBroker;
+let pbi: PbiServerDeps;
 
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), "srv-"));
@@ -33,7 +37,25 @@ beforeEach(() => {
     },
     { runJob: () => new Promise<void>(() => {}) }, // ジョブは進めない
   );
-  server = startRunnerServer(socketPath, { store, scheduler, broker });
+  const pbiStore = new PbiStore(join(dir, "pbis"));
+  pbiStore.loadAll();
+  pbi = {
+    pbiStore,
+    lifecycle: {
+      store: pbiStore,
+      executor: { run: async () => ({ ok: true as const }) },
+      github: {
+        fetchIssue: async () => ({ title: "", body: "" }),
+        createSubIssue: async () => ({ number: 1, url: "" }),
+        updateIssueBody: async () => {},
+        closeIssue: async () => {},
+        prStateForBranch: async () => ({ kind: "none" as const }),
+      },
+      prepareCwd: async () => ({ cwd: dir, cleanup: async () => {} }),
+    },
+    exec: { pbiStore, jobStore: store, scheduler },
+  };
+  server = startRunnerServer(socketPath, { store, scheduler, broker, pbi });
 });
 
 afterEach(() => {
@@ -81,7 +103,7 @@ describe("runner socket protocol", () => {
 
   it("streams job.updated events to subscribers", async () => {
     const { callRunner, openRunnerEventStream } = await client();
-    const events: RunnerEvent[] = [];
+    const events: (RunnerEvent | PbiRunnerEvent)[] = [];
     const ac = new AbortController();
     openRunnerEventStream({
       signal: ac.signal,

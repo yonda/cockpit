@@ -7,12 +7,19 @@ import {
   type RunnerRequest,
   type RunnerResponse,
 } from "../lib/jobs/types";
+import type { PbiJob, PbiRunnerRequest } from "../lib/pbi/types";
 import type { InputBroker } from "./input-broker";
+import { handlePbiRequest, type PbiServerDeps } from "./pbi-server";
 import type { Scheduler } from "./scheduler";
 import type { JobStore } from "./store";
 import { buildBranchName } from "./workflow";
 
-type Deps = { store: JobStore; scheduler: Scheduler; broker: InputBroker };
+type Deps = {
+  store: JobStore;
+  scheduler: Scheduler;
+  broker: InputBroker;
+  pbi: PbiServerDeps;
+};
 
 const ACTIVE = new Set(["queued", "running", "waiting_input"]);
 
@@ -23,6 +30,10 @@ export function startRunnerServer(socketPath: string, deps: Deps): Server {
   const subscribers = new Set<Socket>();
   deps.store.on("job", (job: Job) => {
     const line = `${JSON.stringify({ event: "job.updated", data: job })}\n`;
+    for (const socket of subscribers) socket.write(line);
+  });
+  deps.pbi.pbiStore.on("pbi", (pbi: PbiJob) => {
+    const line = `${JSON.stringify({ event: "pbi.updated", data: pbi })}\n`;
     for (const socket of subscribers) socket.write(line);
   });
 
@@ -56,11 +67,18 @@ function handleLine(
   subscribers: Set<Socket>,
   deps: Deps,
 ): void {
-  let request: RunnerRequest;
+  let request: RunnerRequest | PbiRunnerRequest;
   try {
-    request = JSON.parse(line) as RunnerRequest;
+    request = JSON.parse(line) as RunnerRequest | PbiRunnerRequest;
   } catch {
     respond(socket, { id: "?", error: { message: "invalid json" } });
+    return;
+  }
+
+  if (request.method.startsWith("pbi.")) {
+    void handlePbiRequest(request as PbiRunnerRequest, deps.pbi).then((r) =>
+      respond(socket, { id: request.id, ...r }),
+    );
     return;
   }
 

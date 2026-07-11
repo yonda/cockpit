@@ -6,6 +6,7 @@ import type {
   RunnerRequest,
   RunnerResponse,
 } from "@/lib/jobs/types";
+import type { PbiRunnerEvent, PbiRunnerRequest } from "@/lib/pbi/types";
 
 const REQUEST_TIMEOUT_MS = 5_000;
 const RECONNECT_DELAY_MS = 1_000;
@@ -18,7 +19,7 @@ function getSocketPath(): string {
 }
 
 export async function callRunner<T>(
-  method: RunnerRequest["method"],
+  method: RunnerRequest["method"] | PbiRunnerRequest["method"],
   params: unknown,
 ): Promise<T> {
   const socketPath = getSocketPath();
@@ -83,7 +84,7 @@ export function openRunnerEventStream({
   onError,
 }: {
   signal: AbortSignal;
-  onEvent: (event: RunnerEvent) => void;
+  onEvent: (event: RunnerEvent | PbiRunnerEvent) => void;
   onError: (message: string) => void;
 }): void {
   let socket: Socket | null = null;
@@ -140,6 +141,8 @@ export function openRunnerEventStream({
         if (parsed.id === "sub") continue; // subscription ack
         if (parsed.event === "job.updated") {
           onEvent(parsed as RunnerEvent);
+        } else if (parsed.event === "pbi.updated") {
+          onEvent(parsed as PbiRunnerEvent);
         }
       }
     });
