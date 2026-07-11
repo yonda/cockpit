@@ -52,10 +52,14 @@ export function resumePbi(deps: PbiExecutorDeps, pbiId: string): void {
 export function cancelPbi(deps: PbiExecutorDeps, pbiId: string): void {
   const pbi = deps.pbiStore.get(pbiId);
   if (!pbi) return;
+  // 先に PBI を cancelled にしてから job を止める。
+  // scheduler.cancel() は同期的に "job" イベントを発火し、それを購読する
+  // onJobUpdated が pbi.status を見て早期リターンするため、順序を逆にすると
+  // まだ executing の PBI に対して task_failed の誤エスカレーションが積まれる。
+  deps.pbiStore.transition(pbiId, "cancelled");
   for (const t of pbi.subTasks) {
     if (t.jobId && t.state === "running") {
       deps.scheduler.cancel(t.jobId);
     }
   }
-  deps.pbiStore.transition(pbiId, "cancelled");
 }

@@ -37,6 +37,10 @@ export function onJobUpdated(deps: PbiExecutorDeps, job: Job): void {
     .list()
     .find((p) => p.subTasks.some((t) => t.jobId === job.id));
   if (!pbi) return;
+  // cancelPbi 等で PBI が既に非 executing に遷移した後の遅延イベントは無視する
+  // （例: job のキャンセルが同期的に "job" を発火し、cancelled 済みの PBI に
+  // 対して task_failed の誤エスカレーションが積まれるのを防ぐ）。
+  if (pbi.status !== "executing") return;
   const task = pbi.subTasks.find((t) => t.jobId === job.id);
   if (!task) return;
 

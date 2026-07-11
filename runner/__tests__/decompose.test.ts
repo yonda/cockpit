@@ -7,10 +7,12 @@ import type {
   ExecutorHooks,
   ExecutorRunOpts,
 } from "../executor";
+import type { CommandRunner, RunResult } from "../exec";
 import type { SubTask } from "../../lib/pbi/types";
 import {
   buildDecomposePrompt,
   runDecomposition,
+  realPrepareCwd,
   type DecomposeDeps,
   type PreparedCwd,
 } from "../decompose";
@@ -146,5 +148,46 @@ describe("runDecomposition", () => {
     );
     expect(res.ok).toBe(false);
     expect(cleanedUp).toBe(true);
+  });
+
+  it("fails when the agent emits an empty task array", async () => {
+    const res = await runDecomposition(deps(new WritingExecutor([])), {
+      repo: "r",
+      issueNumber: 5,
+      title: "t",
+      body: "b",
+      signal: new AbortController().signal,
+    });
+    expect(res.ok).toBe(false);
+  });
+});
+
+describe("realPrepareCwd", () => {
+  /** 呼び出しを記録するだけのフェイク CommandRunner（github.test.ts の FakeCommands と同じ形） */
+  class FakeCommands implements CommandRunner {
+    calls: { cmd: string; args: string[]; cwd: string }[] = [];
+    async run(
+      cmd: string,
+      args: string[],
+      opts: { cwd: string },
+    ): Promise<RunResult> {
+      this.calls.push({ cmd, args, cwd: opts.cwd });
+      return { stdout: "", stderr: "" };
+    }
+  }
+
+  it("adds a detached worktree (no branch) so revise/re-fire never collides", async () => {
+    const commands = new FakeCommands();
+    const prepare = realPrepareCwd(commands, "/repo");
+
+    const { cwd } = await prepare(42);
+
+    expect(cwd.endsWith("decomp/42")).toBe(true);
+    const addCall = commands.calls.find(
+      (c) => c.cmd === "git" && c.args[0] === "worktree" && c.args[1] === "add",
+    );
+    expect(addCall).toBeDefined();
+    expect(addCall!.args).toContain("--detach");
+    expect(addCall!.args).not.toContain("-b");
   });
 });

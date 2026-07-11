@@ -35,6 +35,7 @@ const rec = (over: Partial<SubTaskRecord>): SubTaskRecord => ({
 class FakeGitHub implements GitHubClient {
   closed: number[] = [];
   prStates: Record<string, PrState> = {};
+  throwFor = new Set<string>();
   async fetchIssue() {
     return { title: "", body: "" };
   }
@@ -46,6 +47,7 @@ class FakeGitHub implements GitHubClient {
     this.closed.push(number);
   }
   async prStateForBranch(_repo: string, branch: string): Promise<PrState> {
+    if (this.throwFor.has(branch)) throw new Error("gh api down");
     return this.prStates[branch] ?? { kind: "none" };
   }
 }
@@ -133,5 +135,39 @@ describe("pollOnce", () => {
       .escalations.filter((e) => e.kind === "review_comments");
     expect(escs).toHaveLength(1);
     expect(pbiStore.get(pbiId)!.subTasks[0].state).toBe("in_review");
+  });
+
+  it("isolates a per-PBI failure so other PBIs still get processed", async () => {
+    const pbi1 = executing();
+    pbiStore.setSubTasks(pbi1, [rec({ key: "t1", branch: "feature/100-t" })]);
+
+    const pbi2 = pbiStore.create({
+      repo: "yonda/cockpit",
+      issueNumber: 43,
+      title: "Q",
+    });
+    pbiStore.transition(pbi2.id, "awaiting_approval");
+    pbiStore.transition(pbi2.id, "executing");
+    pbiStore.setSubTasks(pbi2.id, [
+      rec({ key: "t1", branch: "feature/200-t", issueNumber: 200 }),
+    ]);
+
+    const github = new FakeGitHub();
+    github.throwFor.add("feature/100-t"); // pbi1 は gh API 呼び出しで例外
+    github.prStates["feature/200-t"] = {
+      kind: "closed",
+      url: "https://github.com/yonda/cockpit/pull/10",
+    };
+
+    await pollOnce({ pbiStore, github, exec });
+
+    // pbi1: 例外が握りつぶされ、状態は変化しない（次周期で再試行される）
+    expect(pbiStore.get(pbi1)!.subTasks[0].state).toBe("in_review");
+    // pbi2: pbi1 の失敗に巻き込まれず処理が続行される
+    const after2 = pbiStore.get(pbi2.id)!;
+    expect(after2.subTasks[0].state).toBe("failed");
+    expect(after2.escalations.map((e) => e.kind)).toContain(
+      "pr_closed_unmerged",
+    );
   });
 });

@@ -93,24 +93,43 @@ export async function runDecomposition(
     if (!isSubTaskArray(parsed)) {
       return { ok: false, error: "分解結果がスキーマに一致しません" };
     }
+    if (parsed.length === 0) {
+      return {
+        ok: false,
+        error: "分解結果が空です（少なくとも1つのタスクが必要）",
+      };
+    }
     return { ok: true, tasks: parsed };
   } finally {
     await cleanup();
   }
 }
 
-/** 実運用の prepareCwd: origin/main から読み取り worktree を作り、cleanup で破棄する。 */
+/** 実運用の prepareCwd: origin/main から読み取り worktree を作り、cleanup で破棄する。
+    分解は読み取り専用の解析なのでブランチは作らない（detached HEAD）。
+    ブランチを作ると pbi.revise / 再 pbi.fire のたびに同名ブランチが残留して衝突する。 */
 export function realPrepareCwd(commands: CommandRunner, repoDir: string) {
   return async (issueNumber: number): Promise<PreparedCwd> => {
-    const branch = `decomp/${issueNumber}`;
     const wtRoot = join(dirname(repoDir), `${basename(repoDir)}-wt`);
-    const cwd = join(wtRoot, branch);
+    const cwd = join(wtRoot, `decomp/${issueNumber}`);
     await commands.run("git", ["fetch", "origin", "main"], { cwd: repoDir });
-    await commands.run(
-      "git",
-      ["worktree", "add", cwd, "-b", branch, "origin/main"],
-      { cwd: repoDir },
-    );
+    // 前回クラッシュ等で残った worktree を掃除してから作り直す
+    try {
+      await commands.run("git", ["worktree", "remove", "--force", cwd], {
+        cwd: repoDir,
+      });
+    } catch {
+      // 無ければ無視
+    }
+    try {
+      await commands.run("git", ["worktree", "prune"], { cwd: repoDir });
+    } catch {
+      // best-effort
+    }
+    // detached HEAD で作る（ブランチを作らない＝再実行でも衝突しない、リークもない）
+    await commands.run("git", ["worktree", "add", "--detach", cwd, "origin/main"], {
+      cwd: repoDir,
+    });
     await commands.run("pnpm", ["install"], { cwd });
     return {
       cwd,

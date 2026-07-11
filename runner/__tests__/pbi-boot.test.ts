@@ -88,4 +88,52 @@ describe("reconcileOnBoot", () => {
     reconcileOnBoot({ pbiStore, exec });
     expect(pbiStore.get(pbi.id)!.subTasks[0].state).toBe("in_review");
   });
+
+  it("advances a running sub-task to in_review (with prUrl) when its job already finished done, without re-dispatching", () => {
+    const pbi = pbiStore.create({ repo: "r", issueNumber: 42, title: "P" });
+    pbiStore.transition(pbi.id, "awaiting_approval");
+    pbiStore.transition(pbi.id, "executing");
+    const job = jobStore.create({
+      repo: "r",
+      issueNumber: 100,
+      issueTitle: "t",
+      branch: "feature/100-t",
+    });
+    jobStore.transition(job.id, "running");
+    jobStore.transition(job.id, "done", {
+      prUrl: "https://github.com/yonda/cockpit/pull/9",
+    });
+    pbiStore.setSubTasks(pbi.id, [rec({ key: "t1", jobId: job.id })]);
+
+    reconcileOnBoot({ pbiStore, exec });
+
+    const t1 = pbiStore.get(pbi.id)!.subTasks[0];
+    expect(t1.state).toBe("in_review");
+    expect(t1.prUrl).toBe("https://github.com/yonda/cockpit/pull/9");
+    // 再発射されていない（PR が既にあるのに重複ジョブを作らない）
+    expect(jobStore.list()).toHaveLength(1);
+  });
+
+  it("marks a running sub-task failed with a task_failed escalation when its job already finished failed, without auto-retrying", () => {
+    const pbi = pbiStore.create({ repo: "r", issueNumber: 42, title: "P" });
+    pbiStore.transition(pbi.id, "awaiting_approval");
+    pbiStore.transition(pbi.id, "executing");
+    const job = jobStore.create({
+      repo: "r",
+      issueNumber: 100,
+      issueTitle: "t",
+      branch: "feature/100-t",
+    });
+    jobStore.transition(job.id, "running");
+    jobStore.transition(job.id, "failed", { error: "boom" });
+    pbiStore.setSubTasks(pbi.id, [rec({ key: "t1", jobId: job.id })]);
+
+    reconcileOnBoot({ pbiStore, exec });
+
+    const after = pbiStore.get(pbi.id)!;
+    expect(after.subTasks[0].state).toBe("failed");
+    expect(after.escalations.map((e) => e.kind)).toContain("task_failed");
+    // 自動リトライしていない（新規ジョブが作られていない）
+    expect(jobStore.list()).toHaveLength(1);
+  });
 });

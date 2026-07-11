@@ -8,7 +8,7 @@ import { JobStore } from "../store";
 import { PbiStore } from "../pbi-store";
 import { Scheduler } from "../scheduler";
 import { InputBroker } from "../input-broker";
-import type { PbiExecutorDeps } from "../pbi-executor";
+import { onJobUpdated, type PbiExecutorDeps } from "../pbi-executor";
 import {
   cancelPbi,
   pausePbi,
@@ -138,5 +138,33 @@ describe("cancelPbi", () => {
 
     expect(pbiStore.get(pbiId)!.status).toBe("cancelled");
     expect(jobStore.get(job.id)!.status).toBe("cancelled");
+  });
+
+  it("does not leave bogus task_failed escalations when jobStore emits synchronously (production wiring)", () => {
+    // 本番では store.on("job", (job) => onJobUpdated(exec, job)) が常時配線されている。
+    // scheduler.cancel() は同期的に "job" イベントを発火するため、cancelPbi が先に
+    // PBI を cancelled にしておかないと、onJobUpdated が executing のままの PBI を
+    // 見つけて task_failed の誤エスカレーションを積んでしまう。
+    jobStore.on("job", (job) => onJobUpdated(deps, job));
+
+    const pbiId = executing();
+    const job = jobStore.create({
+      repo: "r",
+      issueNumber: 100,
+      issueTitle: "t",
+      branch: "feature/100-t",
+    });
+    pbiStore.setSubTasks(pbiId, [
+      rec({ key: "t1", state: "running", jobId: job.id }),
+    ]);
+
+    cancelPbi(deps, pbiId);
+
+    const after = pbiStore.get(pbiId)!;
+    expect(after.status).toBe("cancelled");
+    expect(
+      after.escalations.filter((e) => e.kind === "task_failed"),
+    ).toHaveLength(0);
+    expect(after.subTasks[0].state).not.toBe("failed");
   });
 });
