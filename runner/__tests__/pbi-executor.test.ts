@@ -138,4 +138,32 @@ describe("onJobUpdated", () => {
     expect(after.subTasks[0].state).toBe("failed");
     expect(after.escalations.map((e) => e.kind)).toContain("task_failed");
   });
+
+  it("keeps an in_review sub-task in_review when its (review-reply) job fails, adding an escalation", () => {
+    const pbi = pbiStore.create({ repo: "r", issueNumber: 42, title: "P" });
+    pbiStore.transition(pbi.id, "awaiting_approval");
+    pbiStore.transition(pbi.id, "executing");
+    // sub-task を in_review にし、レビュー返信ジョブ (別 job) を紐付ける
+    pbiStore.setSubTasks(pbi.id, [
+      rec({ key: "t1", state: "in_review", jobId: "reply-1", prUrl: "u" }),
+    ]);
+    const replyJob = jobStore.create({
+      repo: "r", issueNumber: 100, issueTitle: "t", branch: "feature/100-t",
+      kind: "review_reply",
+    });
+    // 紐付けを reply job に付け替え（fireReviewReply が行う操作の代替）
+    pbiStore.update(pbi.id, {
+      subTasks: pbiStore.get(pbi.id)!.subTasks.map((t) =>
+        t.key === "t1" ? { ...t, jobId: replyJob.id } : t,
+      ),
+    });
+    jobStore.transition(replyJob.id, "running");
+    const failed = jobStore.transition(replyJob.id, "failed", { error: "reply boom" });
+
+    onJobUpdated(deps, failed);
+
+    const t1 = pbiStore.get(pbi.id)!.subTasks[0];
+    expect(t1.state).toBe("in_review"); // failed にしない
+    expect(pbiStore.get(pbi.id)!.escalations.map((e) => e.kind)).toContain("task_failed");
+  });
 });

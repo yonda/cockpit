@@ -50,15 +50,27 @@ export function onJobUpdated(deps: PbiExecutorDeps, job: Job): void {
     });
   } else if (
     (job.status === "failed" || job.status === "cancelled") &&
-    ["running", "in_review"].includes(task.state)
+    task.state === "running"
   ) {
+    // 実装ジョブの失敗 → sub-task を failed にしてエスカレーション
     deps.pbiStore.transitionSubTask(pbi.id, task.key, "failed");
     deps.pbiStore.addEscalation(pbi.id, {
       kind: "task_failed",
       subTaskKey: task.key,
       detail: job.error ?? `ジョブが ${job.status} で終了しました`,
     });
+  } else if (
+    (job.status === "failed" || job.status === "cancelled") &&
+    task.state === "in_review"
+  ) {
+    // レビュー返信ジョブの失敗 → PR は生きているので sub-task は in_review のまま、通知だけ
+    deps.pbiStore.addEscalation(pbi.id, {
+      kind: "task_failed",
+      subTaskKey: task.key,
+      detail: `レビュー対応ジョブが ${job.status} で終了しました: ${job.error ?? ""}`,
+    });
   }
+  // done かつ in_review（返信ジョブ完了）は無変化（ポーラーが PR を追う）
 
   // PBI 完了判定 → もしくは次の発射
   const fresh = deps.pbiStore.get(pbi.id)!;
