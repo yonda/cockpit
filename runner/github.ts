@@ -105,6 +105,9 @@ export class RealGitHubClient implements GitHubClient {
   }
 
   async prStateForBranch(repo: string, branch: string): Promise<PrState> {
+    // reviewThreads は `gh pr list`/`gh pr view` の JSON フィールドに存在しない
+    // (GraphQL 概念)。list では state/url/number だけ取り、レビュースレッド数は
+    // OPEN のときだけ graphql で別途取得する。
     const { stdout } = await this.gh([
       "pr",
       "list",
@@ -115,12 +118,12 @@ export class RealGitHubClient implements GitHubClient {
       "--state",
       "all",
       "--json",
-      "url,state,reviewThreads",
+      "url,state,number",
     ]);
     const prs = JSON.parse(stdout) as Array<{
       url: string;
       state: string;
-      reviewThreads?: { totalCount: number };
+      number: number;
     }>;
     if (prs.length === 0) return { kind: "none" };
     const pr = prs[0];
@@ -129,7 +132,32 @@ export class RealGitHubClient implements GitHubClient {
     return {
       kind: "open",
       url: pr.url,
-      reviewCommentCount: pr.reviewThreads?.totalCount ?? 0,
+      reviewCommentCount: await this.reviewThreadCount(repo, pr.number),
     };
+  }
+
+  /** OPEN な PR のレビュースレッド数を GraphQL で取得する (失敗時は 0)。 */
+  private async reviewThreadCount(repo: string, number: number): Promise<number> {
+    const [owner, name] = repo.split("/");
+    try {
+      const { stdout } = await this.gh([
+        "api",
+        "graphql",
+        "-f",
+        `query=query{repository(owner:"${owner}",name:"${name}"){pullRequest(number:${number}){reviewThreads{totalCount}}}}`,
+      ]);
+      const parsed = JSON.parse(stdout) as {
+        data?: {
+          repository?: {
+            pullRequest?: { reviewThreads?: { totalCount?: number } };
+          };
+        };
+      };
+      return (
+        parsed.data?.repository?.pullRequest?.reviewThreads?.totalCount ?? 0
+      );
+    } catch {
+      return 0;
+    }
   }
 }

@@ -139,15 +139,11 @@ describe("RealGitHubClient.prStateForBranch", () => {
     });
   });
 
-  it("maps a merged PR", async () => {
+  it("maps a merged PR and queries only gh-pr-list valid fields", async () => {
     const commands = new FakeCommands();
     commands.responses.push({
       stdout: JSON.stringify([
-        {
-          url: "https://github.com/yonda/cockpit/pull/9",
-          state: "MERGED",
-          reviewThreads: { totalCount: 0 },
-        },
+        { url: "https://github.com/yonda/cockpit/pull/9", state: "MERGED", number: 9 },
       ]),
       stderr: "",
     });
@@ -155,18 +151,27 @@ describe("RealGitHubClient.prStateForBranch", () => {
       kind: "merged",
       url: "https://github.com/yonda/cockpit/pull/9",
     });
+    // reviewThreads は gh pr list に存在しないフィールドなので --json に含めない
+    const listArgs = commands.calls[0].args.join(" ");
+    expect(listArgs).toContain("url,state,number");
+    expect(listArgs).not.toContain("reviewThreads");
+    // merged では graphql を呼ばない (list 1 回のみ)
+    expect(commands.calls).toHaveLength(1);
   });
 
-  it("maps an open PR with its review comment count", async () => {
+  it("maps an open PR, fetching review-thread count via graphql", async () => {
     const commands = new FakeCommands();
     commands.responses.push({
       stdout: JSON.stringify([
-        {
-          url: "https://github.com/yonda/cockpit/pull/9",
-          state: "OPEN",
-          reviewThreads: { totalCount: 3 },
-        },
+        { url: "https://github.com/yonda/cockpit/pull/9", state: "OPEN", number: 9 },
       ]),
+      stderr: "",
+    });
+    // 2 回目の呼び出し: gh api graphql で reviewThreads.totalCount
+    commands.responses.push({
+      stdout: JSON.stringify({
+        data: { repository: { pullRequest: { reviewThreads: { totalCount: 3 } } } },
+      }),
       stderr: "",
     });
     expect(await gh(commands).prStateForBranch("r", "feature/1-x")).toEqual({
@@ -174,17 +179,16 @@ describe("RealGitHubClient.prStateForBranch", () => {
       url: "https://github.com/yonda/cockpit/pull/9",
       reviewCommentCount: 3,
     });
+    // OPEN のみ graphql を叩く
+    expect(commands.calls[1].args).toContain("graphql");
+    expect(commands.calls[1].args.join(" ")).toContain("reviewThreads");
   });
 
   it("maps a closed PR", async () => {
     const commands = new FakeCommands();
     commands.responses.push({
       stdout: JSON.stringify([
-        {
-          url: "https://github.com/yonda/cockpit/pull/9",
-          state: "CLOSED",
-          reviewThreads: { totalCount: 0 },
-        },
+        { url: "https://github.com/yonda/cockpit/pull/9", state: "CLOSED", number: 9 },
       ]),
       stderr: "",
     });
