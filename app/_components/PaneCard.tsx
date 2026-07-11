@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { Activity, Check, CircleDot, Loader2, Pause, HelpCircle } from "lucide-react";
 import type { HerdrPane, HerdrStatus } from "@/lib/herdr/types";
+import { RelativeTime } from "./RelativeTime";
 
 const statusConfig: Record<
   HerdrStatus,
@@ -59,16 +60,6 @@ function StatusPill({ status }: { status: HerdrStatus }) {
       {s.label}
     </span>
   );
-}
-
-function relativeTime(iso: string): string {
-  const diffMs = Date.now() - new Date(iso).getTime();
-  const min = Math.floor(diffMs / 60_000);
-  if (min < 1) return "just now";
-  if (min < 60) return `${min}m ago`;
-  const hours = Math.floor(min / 60);
-  if (hours < 24) return `${hours}h ago`;
-  return `${Math.floor(hours / 24)}d ago`;
 }
 
 export function PaneCard({
@@ -172,9 +163,11 @@ export function PaneCard({
           {cwdLabel}
         </span>
         {recap?.lastActivityAt ? (
-          <span className="shrink-0 font-mono text-[10px] text-[var(--ink-muted)]">
-            {relativeTime(recap.lastActivityAt)}
-          </span>
+          <RelativeTime
+            iso={recap.lastActivityAt}
+            variant="short"
+            className="shrink-0 font-mono text-[10px] text-[var(--ink-muted)]"
+          />
         ) : null}
       </div>
     </button>
