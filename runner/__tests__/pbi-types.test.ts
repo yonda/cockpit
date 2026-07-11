@@ -1,0 +1,70 @@
+import { describe, expect, it } from "vitest";
+import {
+  canPbiTransition,
+  canSubTaskTransition,
+  isSubTaskArray,
+} from "../../lib/pbi/types";
+
+describe("canPbiTransition", () => {
+  it("allows decomposing -> awaiting_approval and the revise loop", () => {
+    expect(canPbiTransition("decomposing", "awaiting_approval")).toBe(true);
+    expect(canPbiTransition("awaiting_approval", "decomposing")).toBe(true);
+    expect(canPbiTransition("awaiting_approval", "executing")).toBe(true);
+    expect(canPbiTransition("executing", "completed")).toBe(true);
+  });
+  it("rejects terminal and skipping transitions", () => {
+    expect(canPbiTransition("completed", "executing")).toBe(false);
+    expect(canPbiTransition("decomposing", "executing")).toBe(false);
+    expect(canPbiTransition("decomposing", "completed")).toBe(false);
+  });
+  it("allows cancel/fail from any non-terminal state", () => {
+    expect(canPbiTransition("decomposing", "cancelled")).toBe(true);
+    expect(canPbiTransition("executing", "failed")).toBe(true);
+  });
+});
+
+describe("canSubTaskTransition", () => {
+  it("allows the happy path pending -> running -> in_review -> merged", () => {
+    expect(canSubTaskTransition("pending", "running")).toBe(true);
+    expect(canSubTaskTransition("running", "in_review")).toBe(true);
+    expect(canSubTaskTransition("in_review", "merged")).toBe(true);
+  });
+  it("allows recovery: failed -> running (retry) and any -> skipped", () => {
+    expect(canSubTaskTransition("failed", "running")).toBe(true);
+    expect(canSubTaskTransition("pending", "skipped")).toBe(true);
+    expect(canSubTaskTransition("in_review", "failed")).toBe(true);
+  });
+  it("rejects transitions out of terminal states", () => {
+    expect(canSubTaskTransition("merged", "running")).toBe(false);
+    expect(canSubTaskTransition("skipped", "running")).toBe(false);
+  });
+});
+
+describe("isSubTaskArray", () => {
+  const valid = [
+    {
+      key: "t1",
+      title: "型を作る",
+      goal: "土台",
+      deliverable: "types.ts",
+      acceptanceCriteria: ["テストが通る"],
+      dependsOn: [],
+    },
+    {
+      key: "t2",
+      title: "store を作る",
+      goal: "永続化",
+      deliverable: "store.ts",
+      acceptanceCriteria: ["保存できる"],
+      dependsOn: ["t1"],
+    },
+  ];
+  it("accepts a well-formed array", () => {
+    expect(isSubTaskArray(valid)).toBe(true);
+  });
+  it("rejects missing fields and wrong types", () => {
+    expect(isSubTaskArray([{ key: "t1" }])).toBe(false);
+    expect(isSubTaskArray("nope")).toBe(false);
+    expect(isSubTaskArray([{ ...valid[0], dependsOn: "t1" }])).toBe(false);
+  });
+});
