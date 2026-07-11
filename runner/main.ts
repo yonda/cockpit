@@ -1,9 +1,13 @@
 import { JOBS_DIR, RUNNER_SOCKET_PATH } from "../lib/jobs/types";
-import { PBIS_DIR } from "../lib/pbi/types";
+import { PBIS_DIR, PBI_POLL_INTERVAL_MS } from "../lib/pbi/types";
 import { realPrepareCwd } from "./decompose";
 import { RealCommandRunner } from "./exec";
 import { RealGitHubClient } from "./github";
 import { InputBroker } from "./input-broker";
+import { onJobUpdated, type PbiExecutorDeps } from "./pbi-executor";
+import { reconcileOnBoot } from "./pbi-boot";
+import type { LifecycleDeps } from "./pbi-lifecycle";
+import { startPoller } from "./pbi-poller";
 import type { PbiServerDeps } from "./pbi-server";
 import { PbiStore } from "./pbi-store";
 import { Scheduler } from "./scheduler";
@@ -27,26 +31,30 @@ function main(): void {
     repoDir: REPO_DIR,
   });
 
-  // PBI オーケストレーション依存の配線。起動時復旧（発射済みジョブとの再接続・
-  // ポーラー起動）は Task 12 で追加する。
+  // PBI オーケストレーション依存の配線。
   const pbiStore = new PbiStore(PBIS_DIR);
   pbiStore.loadAll();
-  const pbi: PbiServerDeps = {
-    pbiStore,
-    lifecycle: {
-      store: pbiStore,
-      executor: new SdkExecutor(),
-      github: new RealGitHubClient(commands, REPO_DIR),
-      prepareCwd: realPrepareCwd(commands, REPO_DIR),
-    },
-    exec: { pbiStore, jobStore: store, scheduler },
+  const github = new RealGitHubClient(commands, REPO_DIR);
+  const exec: PbiExecutorDeps = { pbiStore, jobStore: store, scheduler };
+  const lifecycle: LifecycleDeps = {
+    store: pbiStore,
+    executor: new SdkExecutor(),
+    github,
+    prepareCwd: realPrepareCwd(commands, REPO_DIR),
   };
+  const pbi: PbiServerDeps = { pbiStore, lifecycle, exec };
+
+  // Launch Pad ジョブの状態変化を PBI に反映（PR 作成 → in_review、以降のマージ
+  // 検知はポーラーが担う）。
+  store.on("job", (job) => onJobUpdated(exec, job));
 
   startRunnerServer(RUNNER_SOCKET_PATH, { store, scheduler, broker, pbi });
   scheduler.resumeOnBoot();
+  reconcileOnBoot({ pbiStore, exec });
+  startPoller({ pbiStore, github, exec }, PBI_POLL_INTERVAL_MS);
 
   console.log(
-    `[runner] listening on ${RUNNER_SOCKET_PATH} (repo: ${REPO_DIR}, jobs: ${JOBS_DIR})`,
+    `[runner] listening on ${RUNNER_SOCKET_PATH} (repo: ${REPO_DIR}, jobs: ${JOBS_DIR}, pbis: ${PBIS_DIR})`,
   );
 }
 
