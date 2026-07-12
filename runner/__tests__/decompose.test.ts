@@ -190,4 +190,23 @@ describe("realPrepareCwd", () => {
     expect(addCall!.args).toContain("--detach");
     expect(addCall!.args).not.toContain("-b");
   });
+
+  it("fetches origin/main in the repoDir before adding the worktree", async () => {
+    const commands = new FakeCommands();
+    const prepare = realPrepareCwd(commands, "/repo");
+
+    await prepare(42);
+
+    const fetchIndex = commands.calls.findIndex(
+      (c) =>
+        c.cmd === "git" &&
+        c.args.join(" ") === "fetch origin main" &&
+        c.cwd === "/repo",
+    );
+    const addIndex = commands.calls.findIndex(
+      (c) => c.cmd === "git" && c.args[0] === "worktree" && c.args[1] === "add",
+    );
+    expect(fetchIndex).toBeGreaterThanOrEqual(0);
+    expect(addIndex).toBeGreaterThan(fetchIndex);
+  });
 });

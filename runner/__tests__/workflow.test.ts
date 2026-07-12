@@ -361,6 +361,79 @@ describe("runIssueJob", () => {
     });
   });
 
+  it("parallel jobs serialize git fetch origin main per repoDir while the rest runs concurrently", async () => {
+    // fetch の実行区間を持たせて重なりを検出するフェイク
+    class FetchTrackingCommands extends FakeCommands {
+      activeFetches = 0;
+      maxActiveFetches = 0;
+      fetchCount = 0;
+
+      async run(cmd: string, args: string[], opts: { cwd: string }) {
+        if (cmd === "git" && args[0] === "fetch") {
+          this.fetchCount++;
+          this.activeFetches++;
+          this.maxActiveFetches = Math.max(
+            this.maxActiveFetches,
+            this.activeFetches,
+          );
+          // 実行区間を持たせる (直列化されていなければここで区間が重なる)
+          await new Promise((r) => setTimeout(r, 5));
+          this.activeFetches--;
+        }
+        return super.run(cmd, args, opts);
+      }
+    }
+
+    // 2 ジョブが同時にエージェント実行へ到達するまで互いに待つバリア。
+    // fetch だけでなくジョブ全体が直列化されてしまうと、片方がここへ
+    // 到達できずテストがタイムアウトする (= fetch のみの直列化を検証)。
+    class BarrierExecutor implements AgentExecutor {
+      started = 0;
+      private waiters: (() => void)[] = [];
+
+      async run(_opts: ExecutorRunOpts, hooks: ExecutorHooks) {
+        hooks.onSessionId(`sess-${this.started}`);
+        this.started++;
+        if (this.started >= 2) {
+          for (const w of this.waiters) w();
+        } else {
+          await new Promise<void>((r) => this.waiters.push(r));
+        }
+        return { ok: true as const };
+      }
+    }
+
+    const commands = new FetchTrackingCommands();
+    const executor = new BarrierExecutor();
+    const deps = makeDeps({ commands, executor });
+
+    const job1 = store.create({
+      repo: "yonda/cockpit",
+      issueNumber: 1,
+      issueTitle: "task one",
+      branch: "feature/1-task-one",
+    });
+    const job2 = store.create({
+      repo: "yonda/cockpit",
+      issueNumber: 2,
+      issueTitle: "task two",
+      branch: "feature/2-task-two",
+    });
+
+    await Promise.all([
+      runIssueJob(deps, job1.id, new AbortController().signal),
+      runIssueJob(deps, job2.id, new AbortController().signal),
+    ]);
+
+    // fetch は 2 回呼ばれるが、同時には 1 本しか走らない
+    expect(commands.fetchCount).toBe(2);
+    expect(commands.maxActiveFetches).toBe(1);
+    // fetch 後の処理は各ジョブで並行実行され、両ジョブとも完走する
+    expect(executor.started).toBe(2);
+    expect(store.get(job1.id)!.status).toBe("done");
+    expect(store.get(job2.id)!.status).toBe("done");
+  });
+
   it("uses a review-reply prompt when the job kind is review_reply", async () => {
     const deps = makeDeps();
     const job = store.create({
