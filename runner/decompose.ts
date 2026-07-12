@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import type { AgentExecutor } from "./executor";
 import type { CommandRunner } from "./exec";
+import { fetchOriginMain } from "./git-fetch";
 import { isSubTaskArray, type SubTask } from "../lib/pbi/types";
 
 export const DECOMPOSITION_FILE = "decomposition.json";
@@ -112,7 +113,8 @@ export function realPrepareCwd(commands: CommandRunner, repoDir: string) {
   return async (issueNumber: number): Promise<PreparedCwd> => {
     const wtRoot = join(dirname(repoDir), `${basename(repoDir)}-wt`);
     const cwd = join(wtRoot, `decomp/${issueNumber}`);
-    await commands.run("git", ["fetch", "origin", "main"], { cwd: repoDir });
+    // 同一 repoDir への並行 fetch は ref lock を奪い合うため、共有ヘルパーで直列化する
+    await fetchOriginMain(commands, repoDir);
     // 前回クラッシュ等で残った worktree を掃除してから作り直す
     try {
       await commands.run("git", ["worktree", "remove", "--force", cwd], {

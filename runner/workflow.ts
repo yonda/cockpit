@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { basename, dirname, join } from "node:path";
 import type { PendingInput } from "../lib/jobs/types";
 import type { AgentExecutor, CommandRunner } from "./executor";
+import { fetchOriginMain } from "./git-fetch";
 import type { InputBroker } from "./input-broker";
 import type { JobStore } from "./store";
 
@@ -150,9 +151,8 @@ export async function runIssueJob(
     // 1. worktree 準備
     let worktreePath = job.worktreePath;
     if (!isResume) {
-      await deps.commands.run("git", ["fetch", "origin", "main"], {
-        cwd: deps.repoDir,
-      });
+      // 同一 repoDir への並行 fetch は ref lock を奪い合うため、共有ヘルパーで直列化する
+      await fetchOriginMain(deps.commands, deps.repoDir);
       worktreePath = await ensureWorktree(deps, job.branch);
       deps.store.update(jobId, { worktreePath });
     }
