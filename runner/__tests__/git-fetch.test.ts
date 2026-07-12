@@ -87,6 +87,99 @@ describe("fetchOriginMain", () => {
     await Promise.all([a, b]);
   });
 
+  describe("ref lock 失敗時のリトライ", () => {
+    /** 指定回数だけ指定エラーで失敗し、その後成功するフェイク */
+    function failingCommands(failures: number, error: () => Error) {
+      const calls: string[][] = [];
+      let remaining = failures;
+      const commands: CommandRunner = {
+        async run(_cmd, args) {
+          calls.push(args);
+          if (remaining > 0) {
+            remaining--;
+            throw error();
+          }
+          return { stdout: "", stderr: "" };
+        },
+      };
+      return { commands, calls };
+    }
+
+    /** 待機せず記録だけする sleep フェイク */
+    function fakeSleep() {
+      const waits: number[] = [];
+      const sleep = async (ms: number) => {
+        waits.push(ms);
+      };
+      return { sleep, waits };
+    }
+
+    it("cannot lock ref で 1 回失敗しても、リトライして成功すれば解決する", async () => {
+      const { commands, calls } = failingCommands(
+        1,
+        () =>
+          new Error(
+            "error: cannot lock ref 'refs/remotes/origin/main': is at abc but expected def",
+          ),
+      );
+      const { sleep, waits } = fakeSleep();
+
+      await expect(
+        fetchOriginMain(commands, "/repo/retry-once", { sleep }),
+      ).resolves.toBeUndefined();
+      expect(calls).toHaveLength(2);
+      expect(waits).toEqual([500]);
+    });
+
+    it("stderr プロパティに cannot lock ref を含むエラーもリトライ対象になる", async () => {
+      const { commands, calls } = failingCommands(1, () => {
+        const error = new Error("Command failed: git fetch origin main");
+        Object.assign(error, {
+          stderr: "error: cannot lock ref 'refs/remotes/origin/main'",
+        });
+        return error;
+      });
+      const { sleep } = fakeSleep();
+
+      await expect(
+        fetchOriginMain(commands, "/repo/retry-stderr", { sleep }),
+      ).resolves.toBeUndefined();
+      expect(calls).toHaveLength(2);
+    });
+
+    it("リトライ上限 (2 回) を超えて失敗し続けた場合は最後のエラーが伝播する", async () => {
+      let count = 0;
+      const { commands, calls } = failingCommands(Infinity, () => {
+        count++;
+        return new Error(
+          `cannot lock ref 'refs/remotes/origin/main' (attempt ${count})`,
+        );
+      });
+      const { sleep, waits } = fakeSleep();
+
+      await expect(
+        fetchOriginMain(commands, "/repo/retry-exhausted", { sleep }),
+      ).rejects.toThrow("(attempt 3)");
+      // 初回 + リトライ 2 回 = 3 回で打ち止め
+      expect(calls).toHaveLength(3);
+      expect(waits).toEqual([500, 500]);
+    });
+
+    it("cannot lock ref を含まない失敗はリトライせず即座に伝播する", async () => {
+      const { commands, calls } = failingCommands(
+        Infinity,
+        () => new Error("fatal: could not read Username for 'https://github.com'"),
+      );
+      const { sleep, waits } = fakeSleep();
+
+      await expect(
+        fetchOriginMain(commands, "/repo/no-retry", { sleep }),
+      ).rejects.toThrow("could not read Username");
+      expect(calls).toHaveLength(1);
+      expect(waits).toEqual([]);
+    });
+  });
+
   it("fetch が失敗しても後続の同一 repoDir の fetch は実行される", async () => {
     let failFirst = true;
     const calls: string[][] = [];
