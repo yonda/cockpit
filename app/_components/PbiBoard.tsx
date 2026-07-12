@@ -12,13 +12,19 @@ import { usePbiState } from "./usePbiState";
 
 const OPEN = new Set(["decomposing", "awaiting_approval", "executing"]);
 
+type Segment = "active" | "done" | "all";
+
 export function PbiBoard({ issues }: { issues: LaunchIssue[] }) {
   const { result, jobsById, live } = usePbiState();
   const [firing, setFiring] = useState<number | null>(null);
   const [fireError, setFireError] = useState<string | null>(null);
+  const [segment, setSegment] = useState<Segment>("active");
 
   const pbis = result.status === "ok" ? result.pbis : [];
-  const activeIssues = new Set(pbis.filter((p) => OPEN.has(p.status)).map((p) => p.issueNumber));
+  const activePbis = pbis.filter((p) => OPEN.has(p.status));
+  const donePbis = pbis.filter((p) => !OPEN.has(p.status));
+  const visiblePbis = segment === "all" ? pbis : segment === "active" ? activePbis : donePbis;
+  const activeIssues = new Set(activePbis.map((p) => p.issueNumber));
 
   const fire = async (issue: LaunchIssue) => {
     if (firing !== null) return;
@@ -70,7 +76,27 @@ export function PbiBoard({ issues }: { issues: LaunchIssue[] }) {
       <section className="flex flex-col gap-3">
         <div className="flex items-center justify-between">
           <h2 className="font-mono text-[13px] font-semibold uppercase tracking-[0.14em] text-[var(--ink-muted)]">PBIs</h2>
-          <LiveIndicator live={live} />
+          <div className="flex items-center gap-3">
+            <div className="flex items-center border border-[var(--hairline)]">
+              {(
+                [
+                  { key: "active", label: `active ${activePbis.length}` },
+                  { key: "done", label: `done ${donePbis.length}` },
+                  { key: "all", label: "all" },
+                ] as const
+              ).map(({ key, label }) => (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => setSegment(key)}
+                  className={`px-2.5 py-1 font-mono text-[10px] uppercase tracking-[0.14em] transition ${segment === key ? "bg-[var(--accent)]/10 text-[var(--accent)]" : "text-[var(--ink-faint)] hover:text-[var(--ink-muted)]"}`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            <LiveIndicator live={live} />
+          </div>
         </div>
         {result.status === "loading" ? (
           <EmptyState message="loading…" />
@@ -78,9 +104,11 @@ export function PbiBoard({ issues }: { issues: LaunchIssue[] }) {
           <ErrorState title="runner unreachable" message={`${result.message} — bin/service runner-status で確認`} />
         ) : pbis.length === 0 ? (
           <EmptyState message="まだ PBI はありません。pbi Issue を launch してください" />
+        ) : visiblePbis.length === 0 ? (
+          <EmptyState message={segment === "active" ? "アクティブな PBI はありません" : "終了した PBI はありません"} />
         ) : (
           <div className="flex flex-col gap-3">
-            {pbis.map((pbi) => (
+            {visiblePbis.map((pbi) => (
               <PbiCard key={pbi.id} pbi={pbi} jobsById={jobsById} />
             ))}
           </div>
