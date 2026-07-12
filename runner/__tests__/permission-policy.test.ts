@@ -265,6 +265,168 @@ describe("evaluateToolUse: Bash 連結コマンドは全セグメントを判定
   });
 });
 
+// Issue #25 dogfood: 実 PBI ジョブ 12 本の transcript replay で見つかった
+// 過剰転送の緩和と判定漏れの締め。
+describe("dogfood #25: heredoc / コマンド置換 (commit・PR 作成の標準フロー)", () => {
+  it("quoted heredoc からの git commit -F - は allow (本文はリテラル)", () => {
+    expectAllow(
+      bash(
+        "git add app/a.ts && git commit -q -F - <<'EOF'\nfeat: 機能追加\n\n本文に $(danger) や `backtick` を含んでもリテラル\nEOF",
+      ),
+    );
+  });
+
+  it('git commit -m "$(cat <<\'EOF\' ... EOF)" は allow', () => {
+    expectAllow(
+      bash(
+        'git add a.ts && git commit -m "$(cat <<\'EOF\'\nfeat: ボード切替を追加\n\nrefs #1\nEOF\n)" && git push -u origin feature/x 2>&1 | tail -8',
+      ),
+    );
+  });
+
+  it("gh pr create --draft --body-file - <<'EOF' は allow", () => {
+    expectAllow(
+      bash(
+        "gh pr create --draft --title \"feat: x\" --body-file - <<'EOF'\n## 概要\n\nrefs #12\nEOF",
+      ),
+    );
+  });
+
+  it('gh pr create --draft --body "$(cat <<\'EOF\' ...)" は allow', () => {
+    expectAllow(
+      bash(
+        'gh pr create --draft --title "t" --body "$(cat <<\'EOF\'\n## 概要\nrefs #14\nEOF\n)"',
+      ),
+    );
+  });
+
+  it("cat > /tmp/pr-body.md <<'EOF' (tmp への PR 本文書き出し) は allow", () => {
+    expectAllow(bash("cat > /tmp/pr-body-11.md <<'EOF'\n## 概要\nEOF"));
+  });
+
+  it("unquoted heredoc 本文にコマンド置換を含む場合は escalate", () => {
+    expectEscalate(bash("git commit -F - <<EOF\n$(rm -rf /)\nEOF"));
+    expectEscalate(bash("git commit -F - <<EOF\n`whoami`\nEOF"));
+  });
+
+  it("unquoted heredoc でも本文が静的なら allow", () => {
+    expectAllow(bash("git commit -F - <<EOF\nfeat: plain message\nEOF"));
+  });
+
+  it("終端行の無い heredoc は escalate (fail-safe)", () => {
+    expectEscalate(bash("git commit -F - <<'EOF'\nbody only"));
+    expectEscalate(bash("cat <<'EOF'"));
+  });
+
+  it("$(cat <<'EOF') 以外のコマンド置換は従来どおり escalate", () => {
+    expectEscalate(bash('git commit -m "$(whoami)"'));
+    expectEscalate(bash('git commit -m "$(cat /tmp/msg)"'));
+  });
+
+  it("/tmp へのリダイレクトは allow だが /tmp 経由のパス正規化で外に出るものは escalate", () => {
+    expectAllow(bash("echo body > /tmp/out.txt"));
+    expectEscalate(bash("echo body > /tmp/../etc/hosts"));
+  });
+
+  it("行継続 (バックスラッシュ+改行) とコメント行を含むコマンドを解析できる", () => {
+    expectAllow(bash('gh pr create --draft \\\n  --title "t" \\\n  --body "b"'));
+    expectAllow(bash("# セットアップ\ngit status"));
+  });
+});
+
+describe("dogfood #25: cd / git -C は worktree 内のみ allow", () => {
+  it("worktree 内への cd は allow", () => {
+    expectAllow(bash(`cd ${ctx.worktreeDir} && git add -A`));
+    expectAllow(bash(`cd "${ctx.worktreeDir}" && git push -u origin feature/x`));
+    expectAllow(bash("cd runner && ls"));
+  });
+
+  it("worktree 外への cd は escalate", () => {
+    expectEscalate(bash("cd /tmp && rm -rf x"));
+    expectEscalate(bash("cd .. && ls"));
+    expectEscalate(bash("cd ~/other"));
+    expectEscalate(bash("cd $HOME"));
+  });
+
+  it("移動先を特定できない cd は escalate (fail-safe)", () => {
+    expectEscalate(bash("cd"));
+    expectEscalate(bash("cd -"));
+  });
+
+  it("cd 済みでも後続セグメントの危険操作は escalate", () => {
+    expectEscalate(
+      bash(`cd ${ctx.worktreeDir}\nset -e\n# rollback\ngit push origin abc123:refs/heads/main --force-with-lease=main:def456`),
+    );
+  });
+
+  it("git -C が worktree 自身を指す場合は allow", () => {
+    expectAllow(bash(`git -C ${ctx.worktreeDir} status`));
+    expectAllow(bash(`git -C ${ctx.worktreeDir} diff HEAD -- app/a.tsx`));
+  });
+
+  it("git -C でも push の判定は通常どおり行われる", () => {
+    expectEscalate(bash(`git -C ${ctx.worktreeDir} push origin main`));
+    expectAllow(bash(`git -C ${ctx.worktreeDir} push origin feature/x`));
+  });
+});
+
+describe("dogfood #25: パイプライン・開発ツール", () => {
+  it("find | xargs <読み取りコマンド> は allow", () => {
+    expectAllow(
+      bash('find . -name "*.ts*" -print | xargs grep -l "useNow" | grep -v node_modules'),
+    );
+  });
+
+  it("xargs の実行コマンドは再帰判定される (危険なら escalate)", () => {
+    expectEscalate(bash("ls | xargs rm -rf"));
+    expectEscalate(bash("ls | xargs sh -c 'rm -rf /'"));
+    expectEscalate(bash("echo x | xargs git push origin main"));
+  });
+
+  it("npx の既知開発ツールは allow", () => {
+    expectAllow(bash("npx tsc --noEmit 2>&1 | tail -5"));
+    expectAllow(bash("npx eslint runner/mutex.ts && echo CLEAN"));
+  });
+
+  it("npx の未知パッケージ・-p/--package は escalate", () => {
+    expectEscalate(bash("npx some-remote-package"));
+    expectEscalate(bash("npx -p cowsay cowsay hi"));
+    expectEscalate(bash("npx --package foo -c 'bar'"));
+  });
+
+  it("python3 / ps / set / sleep は allow", () => {
+    expectAllow(
+      bash("cat package.json | python3 -c 'import json,sys; print(json.load(sys.stdin))'"),
+    );
+    expectAllow(bash("ps aux | grep runner | head -5"));
+    expectAllow(bash("set -e; git status"));
+    expectAllow(bash("sleep 3; ls"));
+  });
+});
+
+describe("dogfood #25: 判定漏れの締め (worktree 外への副作用)", () => {
+  it("git worktree は list のみ allow、作成・削除は escalate", () => {
+    expectAllow(bash("git worktree list"));
+    expectEscalate(bash("git worktree remove --force ../cockpit-wt/feature/x"));
+    expectEscalate(bash("git worktree add ../cockpit-wt/feature/y"));
+    expectEscalate(bash("git worktree prune"));
+  });
+
+  it("git wt は引数なし (一覧) のみ allow", () => {
+    expectAllow(bash("git wt"));
+    expectAllow(bash("git wt 2>/dev/null"));
+    expectEscalate(bash("git wt -d feature/x"));
+    expectEscalate(bash("git wt feature/new-branch"));
+  });
+
+  it("git config はローカルのみ allow、--global/--system は escalate", () => {
+    expectAllow(bash("git config --get push.default"));
+    expectAllow(bash("git config branch.feature/x.merge refs/heads/feature/x"));
+    expectEscalate(bash("git config --global core.fsmonitor /tmp/evil"));
+    expectEscalate(bash("git config --system user.name x"));
+  });
+});
+
 describe("evaluateToolUse: Bash fail-safe (判定不能は escalate)", () => {
   it.each([
     // コマンド置換・サブシェル・プロセス置換
