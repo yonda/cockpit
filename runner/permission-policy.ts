@@ -7,6 +7,12 @@ import * as path from "node:path";
 // 設計方針: fail-safe。判定不能・パース不能・許可リスト外はすべて escalate に倒す。
 // escalate の reason は cockpit 側の許可プロンプトで人間の判断材料になるため、
 // 「何が引っかかったか」を日本語で具体的に書く。
+//
+// Issue #25 dogfood: 実 PBI ジョブ 12 本 (244 tool_use) の transcript を replay して
+// パターンを補正した。主な過剰転送は (1) heredoc を使った git commit / gh pr create
+// (実装ジョブの標準フロー)、(2) cd / git -C で worktree 自身を指すもの、
+// (3) /tmp への PR 本文書き出し、(4) xargs grep 等の読み取りパイプライン。
+// 詳細は docs/permission-policy-dogfood.md を参照。
 
 export type PolicyContext = {
   /** ジョブが動いている worktree の絶対パス。破壊的操作の許容範囲。 */
@@ -106,10 +112,84 @@ type ParsedSegment = {
   redirectTargets: string[];
 };
 
+// heredoc のデリミタ。quoted ('EOF' / "EOF") なら本文は一切展開されない。
+type HeredocDelimiter = { delim: string; quoted: boolean } | null;
+
+// pos から heredoc のデリミタ (<< の直後) を読む。閉じていない・空などは null。
+function parseHeredocDelimiter(
+  command: string,
+  pos: number,
+): { delim: string; quoted: boolean; next: number } | null {
+  let j = pos;
+  while (command[j] === " " || command[j] === "\t") j++;
+  const q = command[j];
+  if (q === "'" || q === '"') {
+    const end = command.indexOf(q, j + 1);
+    if (end === -1 || end === j + 1) return null;
+    return { delim: command.slice(j + 1, end), quoted: true, next: end + 1 };
+  }
+  const m = /^[A-Za-z0-9_]+/.exec(command.slice(j));
+  if (!m) return null;
+  return { delim: m[0], quoted: false, next: j + m[0].length };
+}
+
+// bodyStart (行頭) から「delim だけの行」を探し、本文と終端行末尾の位置を返す。
+function findHeredocBody(
+  command: string,
+  bodyStart: number,
+  delim: string,
+): { body: string; endOfTerminator: number } | null {
+  let k = bodyStart;
+  while (k <= command.length) {
+    let lineEnd = command.indexOf("\n", k);
+    if (lineEnd === -1) lineEnd = command.length;
+    if (command.slice(k, lineEnd) === delim) {
+      return { body: command.slice(bodyStart, k), endOfTerminator: lineEnd };
+    }
+    if (lineEnd === command.length) return null; // 終端行が無い
+    k = lineEnd + 1;
+  }
+  return null;
+}
+
+// quoted でない heredoc 本文はコマンド置換が展開されるため、含む場合は解析不能扱い。
+function heredocBodyIsStatic(body: string, quoted: boolean): boolean {
+  if (quoted) return true;
+  return !/\$\(|`/.test(body);
+}
+
+// "$(cat <<'EOF' ... EOF)" 形式のコマンド置換を試す。コミットメッセージや
+// PR 本文を組み立てる実装ジョブの標準イディオムで、本文はただのリテラル。
+// pos は "$" の位置。一致すれば本文と次の走査位置を返し、それ以外の $() は
+// 従来どおり解析不能 (呼び出し側で null)。
+function tryParseCatHeredocSubstitution(
+  command: string,
+  pos: number,
+): { text: string; next: number } | null {
+  const m = /^\$\(\s*cat\s+<<-?/.exec(command.slice(pos));
+  if (!m) return null;
+  const d = parseHeredocDelimiter(command, pos + m[0].length);
+  if (!d) return null;
+  const nl = command.indexOf("\n", d.next);
+  if (nl === -1) return null;
+  if (command.slice(d.next, nl).trim() !== "") return null; // デリミタ後は行末まで空
+  const body = findHeredocBody(command, nl + 1, d.delim);
+  if (!body) return null;
+  if (!heredocBodyIsStatic(body.body, d.quoted)) return null;
+  // 終端行の後は空白・改行を挟んで ")" で閉じること
+  let p = body.endOfTerminator;
+  while (p < command.length && /\s/.test(command[p])) p++;
+  if (command[p] !== ")") return null;
+  return { text: body.body, next: p + 1 };
+}
+
 // コマンド文字列を「&& / || / ; / | / & / 改行」で区切ったセグメント列に分解する。
 // 解析できない構文 (コマンド置換 $()・バッククォート・プロセス置換・サブシェル・
 // ブレース展開・閉じていないクォート) を含む場合は null を返し、呼び出し側が
 // fail-safe に escalate する。
+// 例外として、静的に安全と判定できる heredoc (<<'EOF' 形式) と
+// "$(cat <<'EOF' ... EOF)" 形式のコマンド置換だけは解析する (dogfood で
+// git commit / gh pr create の標準フローが全て escalate になっていたため)。
 function parseCommand(command: string): ParsedSegment[] | null {
   const segments: ParsedSegment[] = [];
   let tokens: string[] = [];
@@ -117,6 +197,7 @@ function parseCommand(command: string): ParsedSegment[] | null {
   let current = "";
   let hasCurrent = false;
   let expectRedirectTarget = false;
+  let pendingHeredoc: HeredocDelimiter = null;
   let i = 0;
 
   const pushToken = () => {
@@ -164,9 +245,16 @@ function parseCommand(command: string): ParsedSegment[] | null {
           j += 2;
           continue;
         }
-        // ダブルクォート内でもコマンド置換は実行されるため解析不能扱い
+        // ダブルクォート内でもコマンド置換は実行されるため解析不能扱い。
+        // ただし "$(cat <<'EOF' ... EOF)" だけはリテラルとして解析する。
         if (c === "`") return null;
-        if (c === "$" && command[j + 1] === "(") return null;
+        if (c === "$" && command[j + 1] === "(") {
+          const sub = tryParseCatHeredocSubstitution(command, j);
+          if (!sub) return null;
+          buf += sub.text;
+          j = sub.next;
+          continue;
+        }
         if (c === '"') {
           closed = true;
           j++;
@@ -183,17 +271,51 @@ function parseCommand(command: string): ParsedSegment[] | null {
     }
 
     if (ch === "\\") {
+      // 行継続 (バックスラッシュ + 改行) はトークン区切りとして扱う
+      if (command[i + 1] === "\n") {
+        pushToken();
+        i += 2;
+        continue;
+      }
       current += command[i + 1] ?? "";
       hasCurrent = true;
       i += 2;
       continue;
     }
 
-    // 実行内容が静的に追えない構文はすべて解析不能扱い
+    // コメント (単語の先頭に来た # から行末まで) は読み飛ばす
+    if (ch === "#" && !hasCurrent) {
+      const nl = command.indexOf("\n", i);
+      i = nl === -1 ? command.length : nl; // 改行自体は次の周回で処理
+      continue;
+    }
+
+    // 実行内容が静的に追えない構文はすべて解析不能扱い。
+    // ただし $(cat <<'EOF' ... EOF) だけはリテラルとして解析する。
     if (ch === "`") return null;
-    if (ch === "$" && command[i + 1] === "(") return null;
+    if (ch === "$" && command[i + 1] === "(") {
+      const sub = tryParseCatHeredocSubstitution(command, i);
+      if (!sub) return null;
+      current += sub.text;
+      hasCurrent = true;
+      i = sub.next;
+      continue;
+    }
     if ((ch === "<" || ch === ">") && command[i + 1] === "(") return null;
     if (ch === "(" || ch === ")" || ch === "{" || ch === "}") return null;
+
+    // heredoc (<< / <<-): デリミタを記録し、本文は次の改行から終端行まで読み飛ばす
+    if (ch === "<" && command[i + 1] === "<" && command[i + 2] !== "<") {
+      if (pendingHeredoc) return null; // 1 行に複数の heredoc は非対応
+      let j = i + 2;
+      if (command[j] === "-") j++;
+      const d = parseHeredocDelimiter(command, j);
+      if (!d) return null;
+      pendingHeredoc = { delim: d.delim, quoted: d.quoted };
+      pushToken();
+      i = d.next;
+      continue;
+    }
 
     if (ch === "&" && expectRedirectTarget && !hasCurrent) {
       // 2>&1 の "&1" 部分。セパレータではなくリダイレクト先トークンの一部。
@@ -207,6 +329,15 @@ function parseCommand(command: string): ParsedSegment[] | null {
       pushSegment();
       i++;
       if ((ch === "&" || ch === "|") && command[i] === ch) i++; // && / ||
+      // 改行に到達したら、保留中の heredoc 本文を終端行まで読み飛ばす
+      if (ch === "\n" && pendingHeredoc) {
+        const { delim, quoted } = pendingHeredoc;
+        pendingHeredoc = null;
+        const body = findHeredocBody(command, i, delim);
+        if (!body) return null;
+        if (!heredocBodyIsStatic(body.body, quoted)) return null;
+        i = body.endOfTerminator;
+      }
       continue;
     }
 
@@ -247,6 +378,7 @@ function parseCommand(command: string): ParsedSegment[] | null {
 
   pushSegment();
   if (expectRedirectTarget) return null; // 末尾が "cmd >" で終わっている
+  if (pendingHeredoc) return null; // heredoc 本文が始まらないまま終わっている
   if (segments.length === 0) return null;
   return segments;
 }
@@ -282,7 +414,27 @@ const SAFE_SIMPLE_COMMANDS = new Set([
   "jq",
   "node",
   "pnpm",
+  // dogfood (Issue #25) で観測した読み取り中心・無害なコマンド。
+  // python3 は node と同じ割り切り (実装ジョブは隔離 worktree 内で動く)。
+  "python3",
+  "ps",
+  "set",
+  "sleep",
 ]);
+
+// npx で許可する既知の開発ツール (devDependencies として lock 済みのもの)。
+// これ以外のパッケージ名や -p/--package/-c 指定はリモートパッケージの
+// 取得・実行になり得るため転送する。
+const NPX_SAFE_PACKAGES = new Set(["tsc", "eslint", "prettier", "vitest"]);
+
+// /tmp 配下は PR 本文の一時ファイル等に使う慣習があるため、リダイレクト
+// 書き込みのみ許可する (rm 等の破壊操作は引き続き worktree 内に限定)。
+// 相対パス (worktree 内の tmp/ 等) と混同しないよう絶対パスのみ対象。
+function isTmpPath(target: string): boolean {
+  if (!path.isAbsolute(target)) return false;
+  const resolved = path.resolve(target); // "/tmp/../etc/x" の正規化
+  return resolved.startsWith("/tmp/") || resolved.startsWith("/private/tmp/");
+}
 
 // 引数のパスに書き込む・削除するコマンド。全パス引数が worktree 内であることを要求。
 const WRITE_PATH_COMMANDS = new Set([
@@ -326,9 +478,10 @@ function evaluateSegment(
   segment: ParsedSegment,
   ctx: PolicyContext,
 ): PolicyDecision {
-  // 出力リダイレクト先は worktree 内 (または /dev/null) に限る
+  // 出力リダイレクト先は worktree 内・/tmp 配下・/dev/null に限る
   for (const target of segment.redirectTargets) {
     if (target === "/dev/null") continue;
+    if (isTmpPath(target)) continue;
     if (pathStatus(target, ctx.worktreeDir) !== "inside") {
       return escalate(
         `worktree 外へのリダイレクト書き込みのため転送します: > ${target}`,
@@ -359,10 +512,59 @@ function evaluateSegment(
     return escalate(`コマンド名に変数展開を含むため転送します: ${cmd}`);
   }
 
-  if (cmd === "git") return evaluateGit(tokens);
+  if (cmd === "git") return evaluateGit(tokens, ctx);
   if (cmd === "gh") return evaluateGh(tokens);
   if (cmd === "curl" || cmd === "wget") return evaluateCurlWget(tokens);
   if (WRITE_PATH_COMMANDS.has(cmd)) return evaluateWritePathCommand(tokens, ctx);
+
+  // cd は移動先が worktree 内のときだけ許可する。移動先が worktree 内なら、
+  // 以降のセグメントの相対パスを worktree ルート基準で解決しても
+  // 「実際は外なのに内と誤判定する」ことはない (深い cwd からの .. の方が
+  // 常に worktree ルート基準より内側に留まるため)。
+  if (cmd === "cd") {
+    const args = tokens
+      .slice(1)
+      .filter((t) => t !== "--" && !/^-[A-Za-z@]+$/.test(t));
+    if (args.length !== 1 || args[0] === "-") {
+      return escalate("cd の移動先を特定できないため転送します");
+    }
+    if (pathStatus(args[0], ctx.worktreeDir) !== "inside") {
+      return escalate(
+        `cd が worktree (${ctx.worktreeDir}) 外を指すため転送します: ${args[0]}`,
+      );
+    }
+    return ALLOW;
+  }
+
+  // xargs は実行するコマンド部分を再帰的に判定する (find | xargs grep 等の
+  // 読み取りパイプラインを許可し、xargs rm / xargs sh は従来どおり転送)
+  if (cmd === "xargs") {
+    const VALUE_FLAGS = new Set(["-I", "-i", "-n", "-L", "-P", "-s", "-d", "-E", "-e", "-a"]);
+    let j = 1;
+    while (j < tokens.length && tokens[j].startsWith("-")) {
+      j += VALUE_FLAGS.has(tokens[j]) ? 2 : 1;
+    }
+    const rest = tokens.slice(j);
+    if (rest.length === 0) return ALLOW; // 既定コマンドは echo
+    return evaluateSegment({ tokens: rest, redirectTargets: [] }, ctx);
+  }
+
+  // npx は既知の開発ツールのみ許可 (それ以外はリモートパッケージ実行になり得る)
+  if (cmd === "npx") {
+    const positional = tokens.slice(1).find((t) => !t.startsWith("-"));
+    const packageFlag = tokens.find(
+      (t) => t === "-p" || t === "--package" || t === "-c" || t === "--call",
+    );
+    if (packageFlag) {
+      return escalate(
+        `npx の ${packageFlag} は任意パッケージの実行になるため転送します`,
+      );
+    }
+    if (positional && NPX_SAFE_PACKAGES.has(positional)) return ALLOW;
+    return escalate(
+      `npx の許可リストにないパッケージのため転送します: ${positional ?? "(不明)"}`,
+    );
+  }
 
   if (cmd === "sed") {
     const inPlace = tokens.some(
@@ -394,13 +596,26 @@ function evaluateSegment(
 // git
 // ---------------------------------------------------------------------------
 
-function evaluateGit(tokens: string[]): PolicyDecision {
+function evaluateGit(tokens: string[], ctx: PolicyContext): PolicyDecision {
   // サブコマンドより前のグローバルオプションを走査
   let i = 1;
   let subcommand: string | null = null;
   while (i < tokens.length) {
     const t = tokens[i];
-    if (t === "-C" || t.startsWith("--git-dir") || t.startsWith("--work-tree")) {
+    if (t === "-C") {
+      // -C が worktree 自身 (またはその配下) を指す場合は許可する
+      // (dogfood で「git -C <自分の worktree> status」が頻出したため)。
+      // worktree 外のリポジトリを指す場合は従来どおり転送。
+      const dir = tokens[i + 1];
+      if (typeof dir !== "string" || pathStatus(dir, ctx.worktreeDir) !== "inside") {
+        return escalate(
+          `git -C が worktree 外のリポジトリを操作できるため転送します: ${dir ?? "(不明)"}`,
+        );
+      }
+      i += 2;
+      continue;
+    }
+    if (t.startsWith("--git-dir") || t.startsWith("--work-tree")) {
       // 別リポジトリ (worktree 外) を対象にできるため転送
       return escalate(`git の ${t} は worktree 外のリポジトリを操作できるため転送します`);
     }
@@ -420,6 +635,29 @@ function evaluateGit(tokens: string[]): PolicyDecision {
   }
 
   if (subcommand === "push") return evaluateGitPush(tokens.slice(i + 1));
+
+  // worktree の追加・削除は他ジョブの作業ディレクトリを壊し得るため一覧以外は転送
+  // (git wt は git-wt サブコマンド。引数なし = 一覧のみ許可)
+  if (subcommand === "worktree") {
+    const action = tokens[i + 1] ?? "";
+    if (action === "list") return ALLOW;
+    return escalate(
+      `git worktree ${action} は worktree の作成・削除を行えるため転送します`.trim(),
+    );
+  }
+  if (subcommand === "wt") {
+    if (tokens.length === i + 1) return ALLOW; // 引数なし = 一覧
+    return escalate("git wt の引数付き実行は worktree の作成・削除のため転送します");
+  }
+
+  // グローバル設定の書き換えは worktree 外への副作用 (core.fsmonitor や alias で
+  // 任意実行にもつながる) ため転送。リポジトリローカルの config は許可。
+  if (subcommand === "config") {
+    if (tokens.includes("--global") || tokens.includes("--system")) {
+      return escalate("git config --global/--system は worktree 外の設定を書き換えるため転送します");
+    }
+    return ALLOW;
+  }
 
   // push 以外の git はローカル操作 (add/commit/status/diff/log/checkout 等) として許可。
   // sdk-executor の Bash(git:*) と同じ割り切り。
