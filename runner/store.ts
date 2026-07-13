@@ -59,6 +59,7 @@ export class JobStore extends EventEmitter {
       sessionId: null,
       pendingInput: null,
       prUrl: null,
+      noChanges: false,
       error: null,
       lastActivity: null,
       createdAt: now,
