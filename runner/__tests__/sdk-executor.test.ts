@@ -237,4 +237,16 @@ describe("SdkExecutor.run が query の options を配線する", () => {
     expect(typeof options.canUseTool).toBe("function");
     expect(options.permissionMode).toBe("acceptEdits");
   });
+
+  it("githubToken を query の env.GH_TOKEN に渡す", async () => {
+    mockQuery.mockReturnValueOnce(fakeStream());
+    const { hooks } = makeHooks();
+    const opts = makeRunOpts();
+    opts.githubToken = "tok-1";
+
+    await new SdkExecutor().run(opts, hooks);
+
+    const queryOpts = mockQuery.mock.calls[mockQuery.mock.calls.length - 1][0].options;
+    expect(queryOpts.env.GH_TOKEN).toBe("tok-1");
+  });
 });

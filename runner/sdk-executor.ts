@@ -128,6 +128,10 @@ export class SdkExecutor implements AgentExecutor {
           // 実際の CanUseTool は (toolName, input, { signal, toolUseID, ... })
           // の3引数。3番目の control メタデータはここでは使わない。
           canUseTool: buildCanUseTool(hooks, opts.cwd),
+          // githubToken が指定されていれば、子プロセス環境に GH_TOKEN をセットする
+          env: opts.githubToken
+            ? { ...process.env, GH_TOKEN: opts.githubToken }
+            : process.env,
         },
       });
 
