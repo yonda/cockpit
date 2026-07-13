@@ -4,6 +4,8 @@ import { realPrepareCwd } from "./decompose";
 import { RealCommandRunner } from "./exec";
 import { RealGitHubClient } from "./github";
 import { applyRunnerToken } from "./github-token";
+import type { AgentExecutor } from "./executor";
+import { buildHerdrExecutorFromEnv } from "./herdr-boot";
 import { InputBroker } from "./input-broker";
 import { onJobUpdated, type PbiExecutorDeps } from "./pbi-executor";
 import { reconcileOnBoot } from "./pbi-boot";
@@ -33,11 +35,30 @@ function main(): void {
   store.loadAll();
   const broker = new InputBroker();
   const commands = new RealCommandRunner();
+
+  // 実装ジョブの executor。既定は SdkExecutor、COCKPIT_EXECUTOR=herdr のときだけ
+  // HerdrExecutor (herdr ペイン実行) に差し替える (#58 垂直スライスのオプトイン配線)。
+  // 分解ジョブ (lifecycle) は headless の読み取り解析なので SdkExecutor のまま。
+  // オプトインの設定不備で HerdrExecutor 構築が throw しても、デーモン全体 (分解・
+  // lifecycle 含む) を落とさず SdkExecutor に degrade する (herdr 経路だけ無効化)。
+  let implementExecutor: AgentExecutor = new SdkExecutor();
+  try {
+    implementExecutor = buildHerdrExecutorFromEnv(REPO_DIR) ?? implementExecutor;
+  } catch (err) {
+    console.error(
+      `[runner] HerdrExecutor 構築に失敗したため SdkExecutor に degrade します: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    );
+  }
+  if (implementExecutor.constructor.name === "HerdrExecutor") {
+    console.log("[runner] implement executor: HerdrExecutor (herdr pane)");
+  }
   const scheduler = new Scheduler({
     store,
     broker,
     commands,
-    executor: new SdkExecutor(),
+    executor: implementExecutor,
     repoDir: REPO_DIR,
   });
 
