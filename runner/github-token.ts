@@ -25,6 +25,8 @@ const DEFAULT_TOKEN_FILE = path.join(
   "runner-token",
 );
 
+const DEFAULT_TOKENS_DIR = path.join(os.homedir(), ".config", "cockpit", "tokens");
+
 /** トークンファイルを読み、前後空白を除いた PAT を返す。読めない・空なら throw。 */
 export function loadRunnerToken(filePath: string = DEFAULT_TOKEN_FILE): string {
   let raw: string;
@@ -62,4 +64,15 @@ export function loadRunnerToken(filePath: string = DEFAULT_TOKEN_FILE): string {
 export function applyRunnerToken(env: NodeJS.ProcessEnv = process.env): void {
   const filePath = env.COCKPIT_RUNNER_TOKEN_FILE || DEFAULT_TOKEN_FILE;
   env.GH_TOKEN = loadRunnerToken(filePath);
+}
+
+/**
+ * owner 別トークンを解決する。<tokensDir>/<owner> を読み、loadRunnerToken と同じ
+ * fail-closed 検証 (欠如・空・複数行で throw) を通す。ジョブ単位で呼ぶ。
+ */
+export function resolveToken(
+  owner: string,
+  tokensDir: string = process.env.COCKPIT_TOKENS_DIR || DEFAULT_TOKENS_DIR,
+): string {
+  return loadRunnerToken(path.join(tokensDir, owner));
 }

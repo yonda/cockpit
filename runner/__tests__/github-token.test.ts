@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { applyRunnerToken, loadRunnerToken } from "../github-token";
+import { applyRunnerToken, loadRunnerToken, resolveToken } from "../github-token";
 
 let dir: string;
 
@@ -61,5 +61,36 @@ describe("applyRunnerToken", () => {
     };
     expect(() => applyRunnerToken(env)).toThrow("runner token file を読めません");
     expect(env.GH_TOKEN).toBeUndefined();
+  });
+});
+
+describe("resolveToken", () => {
+  let tokensDir: string;
+  beforeEach(() => {
+    tokensDir = fs.mkdtempSync(path.join(os.tmpdir(), "tokens-"));
+  });
+  afterEach(() => {
+    fs.rmSync(tokensDir, { recursive: true, force: true });
+  });
+
+  it("owner のトークンファイルを読む", () => {
+    fs.writeFileSync(path.join(tokensDir, "acme"), "github_pat_acme\n");
+    expect(resolveToken("acme", tokensDir)).toBe("github_pat_acme");
+  });
+
+  it("owner のトークンが無ければ throw (fail-closed)", () => {
+    expect(() => resolveToken("acme", tokensDir)).toThrow();
+  });
+
+  it("COCKPIT_TOKENS_DIR で既定ディレクトリを上書きできる", () => {
+    fs.writeFileSync(path.join(tokensDir, "acme"), "github_pat_acme\n");
+    const prev = process.env.COCKPIT_TOKENS_DIR;
+    process.env.COCKPIT_TOKENS_DIR = tokensDir;
+    try {
+      expect(resolveToken("acme")).toBe("github_pat_acme");
+    } finally {
+      if (prev === undefined) delete process.env.COCKPIT_TOKENS_DIR;
+      else process.env.COCKPIT_TOKENS_DIR = prev;
+    }
   });
 });
