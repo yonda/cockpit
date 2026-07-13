@@ -3,7 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 
 // 構造ガード (Issue #54): runner とその子プロセス (spawn したエージェントの gh) は
-// keyring の強い classic token (repo フルスコープ、Findy org まで届く) ではなく、
+// keyring の強い classic token (repo フルスコープ、アカウントが届く全 org に及ぶ) ではなく、
 // yonda/cockpit に限定した fine-grained PAT (weak token) で GitHub にアクセスする。
 //
 // gh CLI はトークンを GH_TOKEN > GITHUB_TOKEN > keyring の優先順で解決するため、
