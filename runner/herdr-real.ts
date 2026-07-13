@@ -67,7 +67,7 @@ export class RealHerdrClient implements HerdrClient {
     await herdr(["pane", "run", paneId, launch]);
 
     // interactive な TUI が起動するのを待つ。footer の文言はバージョン差があるため
-    // 複数候補を regex で待ち、駄目でも固定待ちにフォールバックする (dogfood 調整点)。
+    // 複数候補を regex で待ち、駄目でも固定待ちにフォールバックする。
     try {
       await herdr([
         "wait",
@@ -83,9 +83,30 @@ export class RealHerdrClient implements HerdrClient {
       await new Promise((r) => setTimeout(r, 3000));
     }
 
-    // プロンプトを送信して Enter。send-text で本文、send-keys で改行送出。
+    // プロンプト本文を入力欄に入れてから、submit されるまで Enter をリトライする。
+    // dogfood (#58) で判明: footer の readiness マッチは「submit を受け付けられる状態」
+    // より前に出るため、直後に送った 1 回の Enter は起動直後の TUI に取りこぼされ、
+    // 本文が入力欄に残ったまま session が始まらなかった。安定後の単独 Enter は確実に
+    // submit されることを確認済み。そこで Enter を送り、agent_status が idle を抜けたら
+    // submit 成功とみなし、抜けなければ間隔を空けて再送する (最大 ~24 秒)。
     await herdr(["pane", "send-text", paneId, opts.prompt]);
-    await herdr(["pane", "send-keys", paneId, "Enter"]);
+    for (let attempt = 0; attempt < 12; attempt++) {
+      await herdr(["pane", "send-keys", paneId, "Enter"]);
+      await new Promise((r) => setTimeout(r, 2000));
+      if ((await this.agentStatus(paneId)) !== "idle") return; // submit された
+    }
+    throw new Error(
+      `プロンプトを submit できませんでした (agent_status が idle のまま): ${paneId}`,
+    );
+  }
+
+  private async agentStatus(paneId: string): Promise<string> {
+    const out = await herdr(["pane", "list"]);
+    const panes = JSON.parse(out)?.result?.panes;
+    const pane = Array.isArray(panes)
+      ? panes.find((p: { pane_id?: string }) => p.pane_id === paneId)
+      : undefined;
+    return (pane?.agent_status as string) ?? "unknown";
   }
 
   async waitDone(paneId: string, timeoutMs: number): Promise<boolean> {
