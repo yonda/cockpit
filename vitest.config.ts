@@ -6,6 +6,11 @@ export default defineConfig({
     alias: { "@": fileURLToPath(new URL(".", import.meta.url)) },
   },
   test: {
-    include: ["runner/__tests__/**/*.test.ts"],
+    // runner の単体テストと、app 側の純ロジック (.ts) テスト。
+    // React コンポーネント (.tsx) は jsdom 未設定のため対象外。
+    include: [
+      "runner/__tests__/**/*.test.ts",
+      "app/**/__tests__/**/*.test.ts",
+    ],
   },
 });
