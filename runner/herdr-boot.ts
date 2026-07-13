@@ -39,16 +39,40 @@ export function buildHerdrExecutorFromEnv(repoDir: string): AgentExecutor | null
 // これが無いと CLI が worktree 側 settings の allow を untrusted として無視する
 // (PoC E2)。deny/sandbox は trust の有無に関わらず効くが、正常系の allow を通すため
 // dispatcher が spawn 前に付与する。
-export async function trustWorktree(
+// ~/.claude.json は常駐 CLI・全 herdr セッションが読み書きする共有ファイルのため、
+// read-modify-write が重なると lost-update が起きる。同一プロセス内の trustWorktree
+// 呼び出しを直列化して、少なくとも runner 内の競合はなくす (プロセス跨ぎの CLI との
+// 競合は残る既知の制約。将来 CLAUDE_CONFIG_DIR で config を分離するのが本筋)。
+let trustChain: Promise<void> = Promise.resolve();
+
+export function trustWorktree(
   cwd: string,
   claudeJsonPath: string = path.join(os.homedir(), ".claude.json"),
 ): Promise<void> {
-  const file = claudeJsonPath;
+  const next = trustChain.then(() => trustWorktreeUnsafe(cwd, claudeJsonPath));
+  // チェーンは失敗しても次を止めない (直列化のためだけに使う)
+  trustChain = next.catch(() => {});
+  return next;
+}
+
+async function trustWorktreeUnsafe(
+  cwd: string,
+  file: string,
+): Promise<void> {
   let json: Record<string, unknown> = {};
+  let raw: string | null = null;
   try {
-    json = JSON.parse(await fs.promises.readFile(file, "utf8"));
-  } catch {
-    // 未作成なら空から作る
+    raw = await fs.promises.readFile(file, "utf8");
+  } catch (err) {
+    // ファイル未作成 (ENOENT) のときだけ空から作る。それ以外の読み取りエラーは
+    // 権限問題等の可能性があり、握りつぶすと下の全書き換えで実ファイルを壊すため throw。
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+  }
+  if (raw !== null) {
+    // 読めたのにパースできない = 破損 or 書き込み途中。ここで {} にフォールバックして
+    // 全書き換えすると ~/.claude.json (全 project trust・認証状態・履歴) を丸ごと
+    // 消してしまう。データ損失を避けるため throw して中断する (呼び出し側で失敗扱い)。
+    json = JSON.parse(raw) as Record<string, unknown>;
   }
   const projects = (json.projects ?? {}) as Record<
     string,
@@ -56,7 +80,7 @@ export async function trustWorktree(
   >;
   projects[cwd] = { ...(projects[cwd] ?? {}), hasTrustDialogAccepted: true };
   json.projects = projects;
-  // 原子的に書き換える (常駐 CLI が読む共有ファイルのため破損を避ける)
+  // 原子的に書き換える (torn write を避ける)。lost-update は上のチェーンで直列化。
   const tmp = `${file}.tmp-${process.pid}`;
   await fs.promises.writeFile(tmp, JSON.stringify(json, null, 2));
   await fs.promises.rename(tmp, file);

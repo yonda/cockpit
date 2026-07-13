@@ -23,6 +23,13 @@ describe("trustWorktree", () => {
     expect(json.projects["/wt/job"].hasTrustDialogAccepted).toBe(true);
   });
 
+  it("パース不能 (破損/書き込み途中) なら throw して全書き換えしない", async () => {
+    fs.writeFileSync(file, '{"projects": {"/keep": {"hasT'); // 破損
+    await expect(trustWorktree("/wt/job", file)).rejects.toThrow();
+    // 元ファイルは壊さない (データ損失を避ける)
+    expect(fs.readFileSync(file, "utf8")).toBe('{"projects": {"/keep": {"hasT');
+  });
+
   it("既存の他プロジェクト設定を壊さない", async () => {
     fs.writeFileSync(
       file,

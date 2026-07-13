@@ -52,13 +52,15 @@ export interface TranscriptReader {
     timeoutMs: number,
   ): Promise<{ path: string; sessionId: string } | null>;
   /**
-   * transcript を fromLine 以降だけ読み、抽出済み activity 文字列と次の行番号を返す。
-   * ポーリングで繰り返し呼ばれる。
+   * transcript を fromOffset バイト以降だけ読み、抽出済み activity 文字列と次の
+   * 読み取り開始バイトを返す。ポーリングで繰り返し呼ばれるため、追記分のみを読む
+   * (全再読の O(n^2) を避ける)。追記途中の不完全な最終行は消費せず nextOffset に
+   * 含めない (次回読み直す)。
    */
   readActivitySince(
     path: string,
-    fromLine: number,
-  ): Promise<{ activities: string[]; nextLine: number }>;
+    fromOffset: number,
+  ): Promise<{ activities: string[]; nextOffset: number }>;
 }
 
 export type HerdrExecutorDeps = {
@@ -116,6 +118,17 @@ export class HerdrExecutor implements AgentExecutor {
     const doneTimeoutMs = this.deps.doneTimeoutMs ?? 30 * 60_000;
 
     let paneId: string | null = null;
+    let closed = false;
+    // ペインは高々一度だけ閉じる (abort リスナと finally の二重 close を防ぐ)。
+    const closeOnce = async () => {
+      if (closed || !paneId) return;
+      closed = true;
+      await this.deps.herdr.closePane(paneId).catch(() => {});
+    };
+    // 失敗・timeout 時はペインを残して人間が調査できるようにする (dogfood 前提)。
+    // 成功・abort 時のみ閉じる。closePane 呼び出し済みなら二度目は no-op。
+    let outcome: "success" | "keep" = "success";
+
     try {
       await this.deps.trustWorktree(opts.cwd);
 
@@ -126,10 +139,10 @@ export class HerdrExecutor implements AgentExecutor {
       });
 
       const onAbort = () => {
-        if (paneId) void this.deps.herdr.closePane(paneId).catch(() => {});
+        void closeOnce();
       };
       if (opts.signal.aborted) {
-        onAbort();
+        await closeOnce();
         return { ok: false, error: "aborted before start" };
       }
       opts.signal.addEventListener("abort", onAbort, { once: true });
@@ -149,52 +162,77 @@ export class HerdrExecutor implements AgentExecutor {
           sessionTimeoutMs,
         );
         if (!session) {
+          outcome = "keep";
           return { ok: false, error: "session transcript did not appear" };
         }
         hooks.onSessionId(session.sessionId);
 
-        // 完了検知と activity ポーリングを並行させる。done を待ちつつ、間で
-        // transcript を読み進めて onActivity に流す。
+        // resume 時、transcript には前回までの履歴が既に入っている。オフセットを
+        // 末尾まで進めて履歴を activity として再生しない (今回の追記分だけ流す)。
+        let offset = 0;
+        if (opts.resumeSessionId) {
+          const primed = await this.deps.transcript.readActivitySince(
+            session.path,
+            0,
+          );
+          offset = primed.nextOffset;
+        }
+
+        // 完了検知と activity ポーリングを並行させる。waitDone が resolve でも
+        // reject でも done を確定させ、while ループが確実に抜けるようにする
+        // (reject を握りつぶさず後段の await donePromise で顕在化させる)。
         const donePromise = this.deps.herdr.waitDone(paneId, doneTimeoutMs);
-        let fromLine = 0;
         let done = false;
-        void donePromise.then((d) => {
-          done = true;
-          return d;
-        });
+        donePromise.then(
+          () => {
+            done = true;
+          },
+          () => {
+            done = true;
+          },
+        );
 
         while (!done) {
-          if (opts.signal.aborted) return { ok: false, error: "aborted" };
-          const { activities, nextLine } =
-            await this.deps.transcript.readActivitySince(session.path, fromLine);
+          if (opts.signal.aborted) {
+            await closeOnce();
+            return { ok: false, error: "aborted" };
+          }
+          const { activities, nextOffset } =
+            await this.deps.transcript.readActivitySince(session.path, offset);
           for (const a of activities) hooks.onActivity(a);
-          fromLine = nextLine;
+          offset = nextOffset;
           await sleep(pollIntervalMs);
         }
 
+        // reject ならここで throw して外側 catch が実エラーとして返す。
         const ok = await donePromise;
         // done 後に残った activity を最後まで吸い上げる。
         const tail = await this.deps.transcript.readActivitySince(
           session.path,
-          fromLine,
+          offset,
         );
         for (const a of tail.activities) hooks.onActivity(a);
 
-        if (opts.signal.aborted) return { ok: false, error: "aborted" };
-        return ok
-          ? { ok: true }
-          : { ok: false, error: "agent did not reach done before timeout" };
+        if (opts.signal.aborted) {
+          await closeOnce();
+          return { ok: false, error: "aborted" };
+        }
+        if (ok) return { ok: true };
+        outcome = "keep";
+        return { ok: false, error: "agent did not reach done before timeout" };
       } finally {
         opts.signal.removeEventListener("abort", onAbort);
       }
     } catch (err) {
+      outcome = "keep"; // 実エラーはペインを残して調査可能にする
       return {
         ok: false,
         error: err instanceof Error ? err.message : String(err),
       };
     } finally {
-      // ジョブが終わったらペインは閉じる (成功・失敗問わず後片付け)。
-      if (paneId) await this.deps.herdr.closePane(paneId).catch(() => {});
+      // 成功時のみペインを閉じる。失敗・timeout・実エラーは調査のため残す
+      // (abort パスは既に closeOnce 済み)。
+      if (outcome === "success") await closeOnce();
     }
   }
 }

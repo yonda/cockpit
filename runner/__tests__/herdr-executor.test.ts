@@ -54,7 +54,7 @@ function makeFakes(opts: {
   const closed: string[] = [];
   const reads = opts.activitiesPerRead ?? [["tool: Bash"]];
   let readIdx = 0;
-  let line = 0;
+  let offset = 0;
 
   const herdr: Fakes["herdr"] = {
     createCalls,
@@ -81,8 +81,8 @@ function makeFakes(opts: {
     readActivitySince: async () => {
       const activities = reads[readIdx] ?? [];
       readIdx += 1;
-      line += activities.length;
-      return { activities, nextLine: line };
+      offset += activities.length;
+      return { activities, nextOffset: offset };
     },
   };
 
@@ -158,12 +158,35 @@ describe("HerdrExecutor.run", () => {
     expect(fakes.herdr.startCalls[0].prompt).toBe("implement issue #1");
   });
 
-  it("transcript が現れなければ error", async () => {
+  it("resume 時は履歴分を priming で読み飛ばし再生しない", async () => {
+    // 1 回目の read (priming) が履歴、2 回目以降が新規 activity。
+    const fakes = makeFakes({
+      activitiesPerRead: [["履歴A", "履歴B"], ["新規C"]],
+    });
+    const hooks = makeHooks();
+    const exec = new HerdrExecutor(makeDeps(fakes));
+    await exec.run(makeOpts({ resumeSessionId: "prev" }), hooks);
+    // priming で読んだ履歴は onActivity に流さない
+    expect(hooks.activities).not.toContain("履歴A");
+    expect(hooks.activities).toContain("新規C");
+  });
+
+  it("waitDone が reject したら error として返す (無限ループしない)", async () => {
+    const fakes = makeFakes({});
+    fakes.herdr.waitDone = async () => {
+      throw new Error("herdr not found");
+    };
+    const exec = new HerdrExecutor(makeDeps(fakes));
+    const result = await exec.run(makeOpts(), makeHooks());
+    expect(result).toEqual({ ok: false, error: "herdr not found" });
+  });
+
+  it("transcript が現れなければ error・調査のためペインは残す", async () => {
     const fakes = makeFakes({ session: null });
     const exec = new HerdrExecutor(makeDeps(fakes));
     const result = await exec.run(makeOpts(), makeHooks());
     expect(result.ok).toBe(false);
-    expect(fakes.herdr.closed).toContain("w1:p2"); // それでも後片付け
+    expect(fakes.herdr.closed).not.toContain("w1:p2"); // 失敗は残す
   });
 
   it("done に到達せず timeout なら error", async () => {

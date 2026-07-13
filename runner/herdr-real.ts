@@ -100,8 +100,13 @@ export class RealHerdrClient implements HerdrClient {
         String(timeoutMs),
       ]);
       return true;
-    } catch {
-      return false; // timeout (exit 1)
+    } catch (err) {
+      // herdr wait は timeout のとき exit code 1 を返す (skill 仕様)。それだけを
+      // 「未達 = false」として扱い、それ以外 (ENOENT でバイナリ不在・無効な pane で
+      // 別の non-zero 終了) は実エラーとして rethrow し、timeout に偽装しない。
+      const code = (err as { code?: number | string }).code;
+      if (code === 1) return false;
+      throw err;
     }
   }
 
@@ -171,36 +176,43 @@ export class RealTranscriptReader implements TranscriptReader {
 
   async readActivitySince(
     filePath: string,
-    fromLine: number,
-  ): Promise<{ activities: string[]; nextLine: number }> {
-    let content: string;
+    fromOffset: number,
+  ): Promise<{ activities: string[]; nextOffset: number }> {
+    let fd: fs.promises.FileHandle;
     try {
-      content = fs.readFileSync(filePath, "utf8");
+      fd = await fs.promises.open(filePath, "r");
     } catch {
-      return { activities: [], nextLine: fromLine };
+      return { activities: [], nextOffset: fromOffset };
     }
-    // 末尾が改行のとき split で末尾に空要素が出るので落とす。
-    const lines = content.split("\n");
-    if (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
-    const activities: string[] = [];
-    // append-only JSONL では最終行だけが書き込み途中で JSON 不完全になり得る。
-    // その行を lines.length へ進めて確定扱いすると二度と読み直さないため、
-    // パース失敗した最終行は nextLine を進めず次回に持ち越す。
-    let nextLine = lines.length;
-    for (let i = fromLine; i < lines.length; i++) {
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(lines[i]);
-      } catch {
-        if (i === lines.length - 1) {
-          nextLine = i; // 追記途中の最終行: 次回読み直す
-          break;
+    try {
+      const { size } = await fd.stat();
+      if (size <= fromOffset) return { activities: [], nextOffset: fromOffset };
+
+      // 追記分 [fromOffset, size) だけを読む (全再読の O(n^2) を避ける)。
+      const buf = Buffer.allocUnsafe(size - fromOffset);
+      await fd.read(buf, 0, buf.length, fromOffset);
+
+      // 追記途中の不完全な最終行は消費しない。最後の改行までを「確定済み」とし、
+      // その後ろ (次の行の断片) は次回に持ち越す。改行 (0x0A) は UTF-8 の
+      // マルチバイト列の一部にならないため、この境界で切っても文字は壊れない。
+      const lastNl = buf.lastIndexOf(0x0a);
+      if (lastNl === -1) return { activities: [], nextOffset: fromOffset };
+      const consumed = lastNl + 1;
+      const text = buf.subarray(0, consumed).toString("utf8");
+
+      const activities: string[] = [];
+      for (const line of text.split("\n")) {
+        if (line === "") continue;
+        try {
+          const a = extractActivity(JSON.parse(line));
+          if (a) activities.push(a);
+        } catch {
+          // 確定済み行なので通常起きないが、壊れた行はスキップ。
         }
-        continue; // 中間の壊れた行はスキップ (通常発生しない)
       }
-      const a = extractActivity(parsed);
-      if (a) activities.push(a);
+      return { activities, nextOffset: fromOffset + consumed };
+    } finally {
+      await fd.close();
     }
-    return { activities, nextLine };
   }
 }

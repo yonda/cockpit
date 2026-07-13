@@ -45,7 +45,7 @@ describe("RealTranscriptReader", () => {
     expect(found).toBeNull();
   });
 
-  it("readActivitySince は fromLine 以降の text/tool_use を抽出する", async () => {
+  it("readActivitySince は fromOffset 以降の text/tool_use を抽出する", async () => {
     const cwd = "/wt/job";
     const p = writeTranscript(
       cwd,
@@ -66,32 +66,45 @@ describe("RealTranscriptReader", () => {
     const reader = new RealTranscriptReader(root);
     const r = await reader.readActivitySince(p, 0);
     expect(r.activities).toEqual(["tool: Bash", "done"]);
-    expect(r.nextLine).toBe(3);
+    expect(r.nextOffset).toBe(fs.statSync(p).size); // 全行が確定済み
   });
 
-  it("追記途中の不完全な最終行は nextLine を進めず次回に持ち越す", async () => {
+  it("追記途中の不完全な最終行は nextOffset を進めず次回に持ち越す", async () => {
+    const cwd = "/wt/job";
+    const complete =
+      JSON.stringify({
+        type: "assistant",
+        message: { content: [{ type: "text", text: "a" }] },
+      }) + "\n";
+    const p = writeTranscript(cwd, "s", complete + '{"type":"assist'); // 途中
+    const reader = new RealTranscriptReader(root);
+    const r1 = await reader.readActivitySince(p, 0);
+    expect(r1.activities).toEqual(["a"]);
+    expect(r1.nextOffset).toBe(Buffer.byteLength(complete)); // 完成行の直後まで
+
+    // 最終行が完成したら次回に拾える (増分のみ読む)
+    fs.appendFileSync(
+      p,
+      'ant","message":{"content":[{"type":"tool_use","name":"Edit"}]}}\n',
+    );
+    const r2 = await reader.readActivitySince(p, r1.nextOffset);
+    expect(r2.activities).toEqual(["tool: Edit"]);
+  });
+
+  it("追記が無ければ空・オフセット据え置き (増分読み)", async () => {
     const cwd = "/wt/job";
     const p = writeTranscript(
       cwd,
       "s",
       JSON.stringify({
         type: "assistant",
-        message: { content: [{ type: "text", text: "a" }] },
-      }) +
-        "\n" +
-        '{"type":"assist', // 書き込み途中
+        message: { content: [{ type: "text", text: "x" }] },
+      }) + "\n",
     );
     const reader = new RealTranscriptReader(root);
-    const r1 = await reader.readActivitySince(p, 0);
-    expect(r1.activities).toEqual(["a"]);
-    expect(r1.nextLine).toBe(1); // 不完全な行 (index 1) は持ち越し
-
-    // 最終行が完成したら次回に拾える
-    fs.appendFileSync(
-      p,
-      'ant","message":{"content":[{"type":"tool_use","name":"Edit"}]}}\n',
-    );
-    const r2 = await reader.readActivitySince(p, r1.nextLine);
-    expect(r2.activities).toEqual(["tool: Edit"]);
+    const size = fs.statSync(p).size;
+    const r = await reader.readActivitySince(p, size);
+    expect(r.activities).toEqual([]);
+    expect(r.nextOffset).toBe(size);
   });
 });
