@@ -72,6 +72,7 @@ export async function runDecomposition(
         cwd,
         prompt: buildDecomposePrompt(args),
         resumeSessionId: null,
+        // TODO(Task 6+): 分解ジョブの対象リポジトリ owner トークンに差し替える
         githubToken: null,
         signal: args.signal,
       },
