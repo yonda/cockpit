@@ -42,13 +42,24 @@ function job(over: Partial<Job> = {}): Job {
 }
 
 describe("buildSessionToJob", () => {
-  it("sessionId を持つジョブだけを索引する", () => {
+  it("sessionId を持つ active ジョブだけを索引する", () => {
     const map = buildSessionToJob([
-      job({ id: "a", sessionId: "s1" }),
-      job({ id: "b", sessionId: null }),
+      job({ id: "a", sessionId: "s1", status: "running" }),
+      job({ id: "b", sessionId: null, status: "running" }),
     ]);
     expect(map.get("s1")?.id).toBe("a");
     expect(map.size).toBe(1);
+  });
+
+  it("終端ジョブ (done/failed/cancelled) は除外する", () => {
+    const map = buildSessionToJob([
+      job({ id: "d", sessionId: "s2", status: "done" }),
+      job({ id: "f", sessionId: "s3", status: "failed" }),
+      job({ id: "c", sessionId: "s4", status: "cancelled" }),
+      job({ id: "w", sessionId: "s5", status: "waiting_input" }),
+    ]);
+    expect(map.size).toBe(1);
+    expect(map.get("s5")?.id).toBe("w");
   });
 });
 
@@ -87,5 +98,17 @@ describe("planPaneNotify", () => {
 
   it("blocked/done 以外は null", () => {
     expect(planPaneNotify(pane({ agentStatus: "working" }), job(), "x")).toBeNull();
+  });
+
+  it("終端ジョブのペインは buildSessionToJob で除外され個人ペイン扱いになる", () => {
+    // 終端ジョブは索引に入らないため planPaneNotify には job=undefined で渡る
+    const map = buildSessionToJob([job({ sessionId: "sess-1", status: "failed" })]);
+    const linked = map.get("sess-1");
+    const plan = planPaneNotify(
+      pane({ agentStatus: "blocked", sessionId: "sess-1" }),
+      linked,
+      "cockpit",
+    );
+    expect(plan?.title).toBe("AGENT · cockpit — waiting for you"); // JOB ではない
   });
 });

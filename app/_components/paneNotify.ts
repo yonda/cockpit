@@ -1,5 +1,14 @@
-import type { Job } from "@/lib/jobs/types";
+import type { Job, JobStatus } from "@/lib/jobs/types";
 import type { HerdrPane } from "@/lib/herdr/types";
+
+// runner がまだ駆動しているジョブの状態。終端 (done/failed/cancelled) のジョブは
+// もう駆動されておらず、そのペインが残っていても「要判断のジョブ」ではないため
+// 結合対象から除外する。
+const ACTIVE_JOB_STATUSES = new Set<JobStatus>([
+  "queued",
+  "running",
+  "waiting_input",
+]);
 
 // herdr ペインの blocked/done 遷移を、それが HerdrExecutor ジョブのペインか
 // (人間の個人セッションか) で振り分けて通知プランを作る純関数。
@@ -46,7 +55,11 @@ export function planPaneNotify(
   const tag = `cockpit:agent:${pane.paneId}:${status}`;
 
   if (job) {
-    // ジョブ完了通知は JobNotifyWatcher に委ねる。ここは escalation (blocked) のみ。
+    // ジョブ完了通知は JobNotifyWatcher (job.status=done, PR 検証済み) に委ねる。
+    // ここでは pane=done を鳴らさない。pane が done でも PR ゲート未通過なら「完了」
+    // ではないため、pane=done で「done」と鳴らすのは誤情報になる (完了の真実は
+    // job.status)。ワークフローが終端遷移前に死ぬと通知が出ないが、それはジョブが
+    // 詰まっている異常であり、ボード側で顕在化する (通知設計側では追わない)。
     if (status === "done") return null;
     return {
       title: `JOB · #${job.issueNumber} — waiting for you`,
@@ -72,11 +85,18 @@ export function planPaneNotify(
   };
 }
 
-/** running ジョブから sessionId → Job のマップを作る (ペイン結合用)。 */
+/**
+ * active な (runner が駆動中の) ジョブから sessionId → Job のマップを作る。
+ * 終端ジョブ (done/failed/cancelled) は除外する: 失敗時にペインを残す運用のため
+ * 死んだジョブに紐づき続けると、そのペインでの blocked が誤って「要判断のジョブ」
+ * として通知されてしまう。除外により、終端ジョブのペインは個人ペイン扱いになる。
+ */
 export function buildSessionToJob(jobs: Job[]): Map<string, Job> {
   const map = new Map<string, Job>();
   for (const job of jobs) {
-    if (job.sessionId) map.set(job.sessionId, job);
+    if (job.sessionId && ACTIVE_JOB_STATUSES.has(job.status)) {
+      map.set(job.sessionId, job);
+    }
   }
   return map;
 }

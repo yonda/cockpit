@@ -41,6 +41,11 @@ export function AgentNotifyWatcher() {
 
   useEffect(() => {
     if (result.status !== "ok") return;
+    // ジョブ一覧がまだ読めていない間は評価しない (prevRef も seed しない)。
+    // ここで seed してしまうと、jobs 読込前に blocked へ遷移したジョブペインが
+    // 個人ペインと誤判定され、prevRef に blocked が記録されて以後 JOB ラベルの
+    // escalation が二度と出なくなる (poll ラグの永続化を防ぐ)。
+    if (jobsResult.status !== "ok") return;
     const state = result.state;
 
     const current = new Map<string, HerdrStatus>();
@@ -60,9 +65,7 @@ export function AgentNotifyWatcher() {
     const labels = new Map(
       state.workspaces.map((w) => [w.workspaceId, w.label]),
     );
-    const sessionToJob = buildSessionToJob(
-      jobsResult.status === "ok" ? jobsResult.jobs : [],
-    );
+    const sessionToJob = buildSessionToJob(jobsResult.jobs);
 
     let soundPlayed = false;
     for (const pane of state.panes) {
