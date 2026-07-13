@@ -467,3 +467,39 @@ describe("evaluateToolUse: Bash fail-safe (判定不能は escalate)", () => {
     }
   });
 });
+
+describe("dogfood #39: dangerouslyDisableSandbox は無条件 escalate", () => {
+  // sandbox (Layer 1) を無効化する Bash は、コマンド内容が静的に無害でも
+  // 物理隔離が外れるため人間の判断へ転送する (PoC E2 の必須 follow-up)。
+  // これが無いと「無害風コマンド + sandbox 解除」が auto-allow され、
+  // worktree 外書き込み・未許可 egress が OS に素通りしてしまう。
+  it.each([
+    "echo hi",
+    "git status",
+    "ls",
+    `cat ${ctx.worktreeDir}/package.json`,
+  ])("%s でも dangerouslyDisableSandbox:true なら escalate", (command) => {
+    expectEscalate(
+      evaluateToolUse("Bash", { command, dangerouslyDisableSandbox: true }, ctx),
+    );
+  });
+
+  it("フラグが false / 未指定なら通常どおり判定される (回帰防止)", () => {
+    expectAllow(
+      evaluateToolUse("Bash", { command: "git status", dangerouslyDisableSandbox: false }, ctx),
+    );
+    expectAllow(evaluateToolUse("Bash", { command: "git status" }, ctx));
+  });
+
+  it("reason に sandbox 無効化の旨が含まれる", () => {
+    const result = evaluateToolUse(
+      "Bash",
+      { command: "echo hi", dangerouslyDisableSandbox: true },
+      ctx,
+    );
+    expect(result).toMatchObject({ decision: "escalate" });
+    if (result.decision === "escalate") {
+      expect(result.reason).toContain("dangerouslyDisableSandbox");
+    }
+  });
+});
