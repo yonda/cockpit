@@ -56,12 +56,16 @@ export class RealHerdrClient implements HerdrClient {
       settingsPath: string;
       prompt: string;
       resumeSessionId: string | null;
+      githubToken: string | null;
     },
   ): Promise<void> {
     const resumeFlag = opts.resumeSessionId
       ? ` --resume ${shellQuote(opts.resumeSessionId)}`
       : "";
-    const launch = `cd ${shellQuote(opts.cwd)} && claude --settings ${shellQuote(
+    const tokenPrefix = opts.githubToken
+      ? `GH_TOKEN=${shellQuote(opts.githubToken)} `
+      : "";
+    const launch = `cd ${shellQuote(opts.cwd)} && ${tokenPrefix}claude --settings ${shellQuote(
       opts.settingsPath,
     )}${resumeFlag}`;
     await herdr(["pane", "run", paneId, launch]);

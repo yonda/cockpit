@@ -200,6 +200,7 @@ describe("SdkExecutor.run が query の options を配線する", () => {
       cwd: WORKTREE,
       prompt: "実装してください",
       resumeSessionId: null,
+      githubToken: null,
       signal: new AbortController().signal,
     };
   }

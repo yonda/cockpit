@@ -223,6 +223,7 @@ export async function runIssueJob(
         cwd: worktreePath!,
         prompt,
         resumeSessionId: isResume ? job.sessionId : null,
+        githubToken: null, // TODO(Task 6): owner 別トークンを解決して渡す
         signal,
       },
       {

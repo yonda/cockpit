@@ -6,6 +6,7 @@ export type ExecutorRunOpts = {
   cwd: string;
   prompt: string;
   resumeSessionId: string | null;
+  githubToken: string | null; // 対象リポジトリ owner のトークン (herdr ペイン等へ供給)
   signal: AbortSignal;
 };
 

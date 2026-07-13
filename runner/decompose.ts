@@ -72,6 +72,7 @@ export async function runDecomposition(
         cwd,
         prompt: buildDecomposePrompt(args),
         resumeSessionId: null,
+        githubToken: null,
         signal: args.signal,
       },
       {
