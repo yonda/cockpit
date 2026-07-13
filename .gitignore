@@ -47,3 +47,6 @@ next-env.d.ts
 # runner build output
 /dist
 .superpowers/
+
+# dogfood ハーネスが esbuild で生成する一時バンドル (bin/sandbox-dogfood*.mjs)
+.dogfood-bundle.mjs

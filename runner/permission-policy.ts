@@ -454,6 +454,18 @@ function evaluateBashCommand(
   input: Record<string, unknown>,
   ctx: PolicyContext,
 ): PolicyDecision {
+  // dangerouslyDisableSandbox: true は Seatbelt (Layer 1) を無効化して実行するフラグ。
+  // これが付いた Bash はコマンド内容によらず必ず canUseTool に到達する (PoC E2)。
+  // 静的解析上は無害に見えるコマンド (echo / git status 等) でも、sandbox 解除で
+  // 実行されれば worktree 外書き込み・未許可 egress が OS に素通りしてしまうため、
+  // コマンドを解析するより先に無条件で転送する (物理隔離を外す判断は人間に委ねる)。
+  // #39 dogfood でこの穴 (無害風コマンド + 解除 = auto-allow) を実測して塞いだ。
+  if (input.dangerouslyDisableSandbox === true) {
+    return escalate(
+      "dangerouslyDisableSandbox が指定され sandbox (物理隔離) を無効化するため転送します",
+    );
+  }
+
   const command = input.command;
   if (typeof command !== "string" || command.trim() === "") {
     return escalate("Bash の command を特定できないため転送します");
