@@ -197,7 +197,7 @@ case "${1:-}" in
                       check_runner_token || true
                       [[ -S "$HOME/.cache/cockpit/runner.sock" ]] && echo "socket: ok" || echo "socket: not listening" ;;
   runner-logs)        cmd_runner_logs ;;
-  runner-token-sync)  cmd_runner_token_sync "$2" ;;
+  runner-token-sync)  cmd_runner_token_sync "${2:-}" ;;
   ""|help|-h|--help)  usage ;;
   *) echo "unknown command: $1" >&2; usage; exit 1 ;;
 esac
