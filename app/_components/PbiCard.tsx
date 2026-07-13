@@ -42,7 +42,7 @@ export function PbiCard({ pbi, jobsById }: { pbi: PbiJob; jobsById: Map<string, 
     setBusy(false);
   };
 
-  const mergedCount = pbi.subTasks.filter((t) => ["merged", "skipped"].includes(t.state)).length;
+  const mergedCount = pbi.subTasks.filter((t) => ["merged", "done_no_pr", "skipped"].includes(t.state)).length;
   const terminal = ["completed", "failed", "cancelled"].includes(pbi.status);
 
   return (

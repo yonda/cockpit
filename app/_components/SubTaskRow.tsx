@@ -11,6 +11,7 @@ const stateBadge: Record<SubTaskRecord["state"], { label: string; cls: string }>
   running: { label: "実行中", cls: "text-[var(--signal-info)] border-[var(--signal-info)]/40" },
   in_review: { label: "レビュー待ち", cls: "text-[var(--signal-alert)] border-[var(--signal-alert)]/40" },
   merged: { label: "merged", cls: "text-[var(--signal-ok)] border-[var(--signal-ok)]/40" },
+  done_no_pr: { label: "完了(PRなし)", cls: "text-[var(--signal-ok)] border-[var(--signal-ok)]/40" },
   failed: { label: "failed", cls: "text-[var(--signal-alert)] border-[var(--signal-alert)]/40" },
   skipped: { label: "skip", cls: "text-[var(--ink-faint)] border-[var(--hairline)]" },
 };

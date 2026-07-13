@@ -1,6 +1,6 @@
 import type { SubTaskRecord } from "../lib/pbi/types";
 
-const DONE = new Set(["merged", "skipped"]);
+const DONE = new Set(["merged", "done_no_pr", "skipped"]);
 
 export function readySubTasks(subTasks: SubTaskRecord[]): SubTaskRecord[] {
   const byKey = new Map(subTasks.map((t) => [t.key, t]));

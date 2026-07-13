@@ -38,6 +38,10 @@ describe("readySubTasks", () => {
     const tasks = [t("t1", "skipped"), t("t2", "pending", ["t1"])];
     expect(readySubTasks(tasks).map((x) => x.key)).toEqual(["t2"]);
   });
+  it("treats done_no_pr dependencies as satisfied (差分なし完了でブロック解除)", () => {
+    const tasks = [t("t1", "done_no_pr"), t("t2", "pending", ["t1"])];
+    expect(readySubTasks(tasks).map((x) => x.key)).toEqual(["t2"]);
+  });
   it("excludes tasks with an unmet dependency", () => {
     const tasks = [t("t1", "running"), t("t2", "pending", ["t1"])];
     expect(readySubTasks(tasks)).toEqual([]);
@@ -49,6 +53,12 @@ describe("isPbiComplete", () => {
     expect(isPbiComplete([t("t1", "merged"), t("t2", "skipped")])).toBe(true);
     expect(isPbiComplete([t("t1", "merged"), t("t2", "in_review")])).toBe(false);
     expect(isPbiComplete([])).toBe(false);
+  });
+  it("counts done_no_pr as completed", () => {
+    expect(isPbiComplete([t("t1", "done_no_pr"), t("t2", "merged")])).toBe(true);
+    expect(isPbiComplete([t("t1", "done_no_pr"), t("t2", "pending")])).toBe(
+      false,
+    );
   });
 });
 
