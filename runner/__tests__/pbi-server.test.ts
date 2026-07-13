@@ -87,7 +87,7 @@ beforeEach(() => {
       prepareCwd: async () => {
         const cwd = mkdtempSync(join(tmpdir(), "decomp-"));
         cwds.push(cwd);
-        return { cwd, cleanup: async () => {} };
+        return { cwd, githubToken: "tok-acme", cleanup: async () => {} };
       },
     },
     exec: { pbiStore, jobStore, scheduler },

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { CommandRunner, RunResult } from "../exec";
-import { fetchOriginMain } from "../git-fetch";
+import { fetchOrigin } from "../git-fetch";
 
 /** 手動で解決できる Promise を作るヘルパー */
 function deferred() {
@@ -36,10 +36,10 @@ class GatedCommands implements CommandRunner {
   }
 }
 
-describe("fetchOriginMain", () => {
+describe("fetchOrigin", () => {
   it("repoDir を cwd として git fetch origin main を実行する", async () => {
     const commands = new GatedCommands();
-    await fetchOriginMain(commands, "/repo/single");
+    await fetchOrigin(commands, "/repo/single", "main");
     expect(commands.calls).toEqual([
       { cmd: "git", args: ["fetch", "origin", "main"], cwd: "/repo/single" },
     ]);
@@ -51,8 +51,8 @@ describe("fetchOriginMain", () => {
     const gate2 = deferred();
     commands.gates = [gate1.promise, gate2.promise];
 
-    const first = fetchOriginMain(commands, "/repo/serial");
-    const second = fetchOriginMain(commands, "/repo/serial");
+    const first = fetchOrigin(commands, "/repo/serial", "main");
+    const second = fetchOrigin(commands, "/repo/serial", "main");
 
     await tick();
     // 1 本目が実行中の間、2 本目の fetch は開始されない
@@ -74,8 +74,8 @@ describe("fetchOriginMain", () => {
     const gateB = deferred();
     commands.gates = [gateA.promise, gateB.promise];
 
-    const a = fetchOriginMain(commands, "/repo/parallel-a");
-    const b = fetchOriginMain(commands, "/repo/parallel-b");
+    const a = fetchOrigin(commands, "/repo/parallel-a", "main");
+    const b = fetchOrigin(commands, "/repo/parallel-b", "main");
 
     await tick();
     // a が完了していなくても b の fetch は開始している
@@ -125,7 +125,7 @@ describe("fetchOriginMain", () => {
       const { sleep, waits } = fakeSleep();
 
       await expect(
-        fetchOriginMain(commands, "/repo/retry-once", { sleep }),
+        fetchOrigin(commands, "/repo/retry-once", "main", { sleep }),
       ).resolves.toBeUndefined();
       expect(calls).toHaveLength(2);
       expect(waits).toEqual([500]);
@@ -142,7 +142,7 @@ describe("fetchOriginMain", () => {
       const { sleep } = fakeSleep();
 
       await expect(
-        fetchOriginMain(commands, "/repo/retry-stderr", { sleep }),
+        fetchOrigin(commands, "/repo/retry-stderr", "main", { sleep }),
       ).resolves.toBeUndefined();
       expect(calls).toHaveLength(2);
     });
@@ -158,7 +158,7 @@ describe("fetchOriginMain", () => {
       const { sleep, waits } = fakeSleep();
 
       await expect(
-        fetchOriginMain(commands, "/repo/retry-exhausted", { sleep }),
+        fetchOrigin(commands, "/repo/retry-exhausted", "main", { sleep }),
       ).rejects.toThrow("(attempt 3)");
       // 初回 + リトライ 2 回 = 3 回で打ち止め
       expect(calls).toHaveLength(3);
@@ -173,7 +173,7 @@ describe("fetchOriginMain", () => {
       const { sleep, waits } = fakeSleep();
 
       await expect(
-        fetchOriginMain(commands, "/repo/no-retry", { sleep }),
+        fetchOrigin(commands, "/repo/no-retry", "main", { sleep }),
       ).rejects.toThrow("could not read Username");
       expect(calls).toHaveLength(1);
       expect(waits).toEqual([]);
@@ -194,10 +194,10 @@ describe("fetchOriginMain", () => {
       },
     };
 
-    await expect(fetchOriginMain(commands, "/repo/fail")).rejects.toThrow(
+    await expect(fetchOrigin(commands, "/repo/fail", "main")).rejects.toThrow(
       "fetch failed",
     );
-    await expect(fetchOriginMain(commands, "/repo/fail")).resolves.toBeUndefined();
+    await expect(fetchOrigin(commands, "/repo/fail", "main")).resolves.toBeUndefined();
     expect(calls).toHaveLength(2);
   });
 });

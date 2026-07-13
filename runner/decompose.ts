@@ -8,7 +8,11 @@ import type { RepoRegistry } from "./repo-registry";
 
 export const DECOMPOSITION_FILE = "decomposition.json";
 
-export type PreparedCwd = { cwd: string; cleanup: () => Promise<void> };
+export type PreparedCwd = {
+  cwd: string;
+  githubToken: string | null;
+  cleanup: () => Promise<void>;
+};
 
 export type DecomposeDeps = {
   executor: AgentExecutor;
@@ -67,15 +71,18 @@ export async function runDecomposition(
     signal: AbortSignal;
   },
 ): Promise<{ ok: true; tasks: SubTask[] } | { ok: false; error: string }> {
-  const { cwd, cleanup } = await deps.prepareCwd(args.repo, args.issueNumber);
+  const {
+    cwd,
+    githubToken,
+    cleanup,
+  } = await deps.prepareCwd(args.repo, args.issueNumber);
   try {
     const result = await deps.executor.run(
       {
         cwd,
         prompt: buildDecomposePrompt(args),
         resumeSessionId: null,
-        // TODO(Task 6+): 分解ジョブの対象リポジトリ owner トークンに差し替える
-        githubToken: null,
+        githubToken,
         signal: args.signal,
       },
       {
@@ -117,6 +124,7 @@ export async function runDecomposition(
 export function realPrepareCwd(
   commands: CommandRunner,
   registry: RepoRegistry,
+  resolveToken: (owner: string) => string,
 ) {
   return async (repo: string, issueNumber: number): Promise<PreparedCwd> => {
     const config = registry.resolve(repo);
@@ -125,6 +133,9 @@ export function realPrepareCwd(
         `repo-registry に未登録のリポジトリです: ${repo} (issue #${issueNumber})`,
       );
     }
+    // fail-closed: resolveToken が throw したら、その throw をそのまま伝播させる
+    // （分解ジョブを起動しない。keyring の強い classic token への silent fallback をしない）。
+    const githubToken = resolveToken(config.tokenOwner);
     const repoDir = config.path;
     const wtRoot = join(dirname(repoDir), `${basename(repoDir)}-wt`);
     const cwd = join(wtRoot, `decomp/${issueNumber}`);
@@ -154,6 +165,7 @@ export function realPrepareCwd(
     await commands.run("pnpm", ["install"], { cwd });
     return {
       cwd,
+      githubToken,
       cleanup: async () => {
         try {
           await commands.run("git", ["worktree", "remove", "--force", cwd], {

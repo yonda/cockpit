@@ -65,8 +65,12 @@ describe("buildDecomposePrompt", () => {
 
 describe("runDecomposition", () => {
   const fakePrepareCwd =
-    (cwd: string): DecomposeDeps["prepareCwd"] =>
-    async (): Promise<PreparedCwd> => ({ cwd, cleanup: async () => {} });
+    (cwd: string, githubToken: string | null = "tok-acme"): DecomposeDeps["prepareCwd"] =>
+    async (): Promise<PreparedCwd> => ({
+      cwd,
+      githubToken,
+      cleanup: async () => {},
+    });
 
   const deps = (executor: AgentExecutor): DecomposeDeps => ({
     executor,
@@ -134,6 +138,7 @@ describe("runDecomposition", () => {
         executor: boom,
         prepareCwd: async () => ({
           cwd: scratch,
+          githubToken: "tok-acme",
           cleanup: async () => {
             cleanedUp = true;
           },
@@ -160,6 +165,25 @@ describe("runDecomposition", () => {
       signal: new AbortController().signal,
     });
     expect(res.ok).toBe(false);
+  });
+
+  it("passes the resolved owner token from prepareCwd into the executor opts (not null)", async () => {
+    const executor = new WritingExecutor(validTasks);
+    const res = await runDecomposition(
+      {
+        executor,
+        prepareCwd: fakePrepareCwd(scratch, "tok-acme"),
+      },
+      {
+        repo: "acme/widgets",
+        issueNumber: 5,
+        title: "t",
+        body: "b",
+        signal: new AbortController().signal,
+      },
+    );
+    expect(res.ok).toBe(true);
+    expect(executor.lastOpts?.githubToken).toBe("tok-acme");
   });
 });
 
@@ -188,11 +212,12 @@ describe("realPrepareCwd", () => {
 
   it("adds a detached worktree (no branch) so revise/re-fire never collides", async () => {
     const commands = new FakeCommands();
-    const prepare = realPrepareCwd(commands, registry());
+    const prepare = realPrepareCwd(commands, registry(), resolveToken);
 
-    const { cwd } = await prepare("acme/widgets", 42);
+    const { cwd, githubToken } = await prepare("acme/widgets", 42);
 
     expect(cwd.endsWith("decomp/42")).toBe(true);
+    expect(githubToken).toBe("test-token");
     const addCall = commands.calls.find(
       (c) => c.cmd === "git" && c.args[0] === "worktree" && c.args[1] === "add",
     );
@@ -203,7 +228,7 @@ describe("realPrepareCwd", () => {
 
   it("fetches origin/<baseBranch> in the repoDir before adding the worktree", async () => {
     const commands = new FakeCommands();
-    const prepare = realPrepareCwd(commands, registry());
+    const prepare = realPrepareCwd(commands, registry(), resolveToken);
 
     await prepare("acme/widgets", 42);
 
@@ -222,10 +247,27 @@ describe("realPrepareCwd", () => {
 
   it("throws a clear error when the repo is not registered", async () => {
     const commands = new FakeCommands();
-    const prepare = realPrepareCwd(commands, new RepoRegistry([]));
+    const prepare = realPrepareCwd(commands, new RepoRegistry([]), resolveToken);
 
     await expect(prepare("unknown/repo", 42)).rejects.toThrow(
       "repo-registry に未登録のリポジトリです",
     );
+  });
+
+  it("fails closed when resolveToken throws (does not proceed tokenless)", async () => {
+    const commands = new FakeCommands();
+    const failingResolveToken = (): string => {
+      throw new Error("token file が見つかりません");
+    };
+    const prepare = realPrepareCwd(commands, registry(), failingResolveToken);
+
+    await expect(prepare("acme/widgets", 42)).rejects.toThrow(
+      "token file が見つかりません",
+    );
+    // worktree を作る前に fail-closed で止まっていること
+    const addCall = commands.calls.find(
+      (c) => c.cmd === "git" && c.args[0] === "worktree" && c.args[1] === "add",
+    );
+    expect(addCall).toBeUndefined();
   });
 });

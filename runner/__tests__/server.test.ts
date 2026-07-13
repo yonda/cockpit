@@ -53,7 +53,11 @@ beforeEach(() => {
         closeIssue: async () => {},
         prStateForBranch: async () => ({ kind: "none" as const }),
       },
-      prepareCwd: async () => ({ cwd: dir, cleanup: async () => {} }),
+      prepareCwd: async () => ({
+        cwd: dir,
+        githubToken: "tok-acme",
+        cleanup: async () => {},
+      }),
     },
     exec: { pbiStore, jobStore: store, scheduler },
   };

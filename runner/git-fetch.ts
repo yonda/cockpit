@@ -66,12 +66,3 @@ export async function fetchOrigin(
     }
   });
 }
-
-/** `fetchOrigin(commands, repoDir, "main")` の従来名エイリアス */
-export async function fetchOriginMain(
-  commands: CommandRunner,
-  repoDir: string,
-  options: { sleep?: SleepFn } = {},
-): Promise<void> {
-  return fetchOrigin(commands, repoDir, "main", options);
-}
