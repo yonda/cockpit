@@ -69,7 +69,7 @@ function main(): void {
     store: pbiStore,
     executor: new SdkExecutor(),
     github,
-    prepareCwd: realPrepareCwd(commands, registry, resolveToken),
+    prepareCwd: realPrepareCwd(commands, registry),
   };
   const pbi: PbiServerDeps = { pbiStore, lifecycle, exec };
 

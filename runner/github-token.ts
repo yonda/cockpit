@@ -37,7 +37,7 @@ export function loadRunnerToken(filePath: string = DEFAULT_TOKEN_FILE): string {
   } catch (err) {
     throw new Error(
       `runner token file を読めません: ${filePath} — ` +
-        `yonda/cockpit 限定の fine-grained PAT を配置してください (Issue #54)。 ` +
+        `対象 owner の fine-grained PAT を配置してください。 ` +
         `原因: ${err instanceof Error ? err.message : String(err)}`,
     );
   }
@@ -45,7 +45,7 @@ export function loadRunnerToken(filePath: string = DEFAULT_TOKEN_FILE): string {
   if (token === "") {
     throw new Error(
       `runner token file が空です: ${filePath} — ` +
-        `yonda/cockpit 限定の fine-grained PAT を配置してください (Issue #54)`,
+        `対象 owner の fine-grained PAT を配置してください。`,
     );
   }
   // 複数行・複数トークン (コメント行やローテーション時の書き足し等) は、fail-closed
@@ -53,7 +53,7 @@ export function loadRunnerToken(filePath: string = DEFAULT_TOKEN_FILE): string {
   if (/\s/.test(token)) {
     throw new Error(
       `runner token file にトークン以外の内容が含まれています: ${filePath} — ` +
-        `PAT 1 つだけを 1 行で配置してください (Issue #54)`,
+        `PAT 1 つだけを 1 行で配置してください。`,
     );
   }
   return token;

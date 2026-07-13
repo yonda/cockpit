@@ -188,7 +188,7 @@ describe("realPrepareCwd", () => {
 
   it("adds a detached worktree (no branch) so revise/re-fire never collides", async () => {
     const commands = new FakeCommands();
-    const prepare = realPrepareCwd(commands, registry(), resolveToken);
+    const prepare = realPrepareCwd(commands, registry());
 
     const { cwd } = await prepare("acme/widgets", 42);
 
@@ -203,7 +203,7 @@ describe("realPrepareCwd", () => {
 
   it("fetches origin/<baseBranch> in the repoDir before adding the worktree", async () => {
     const commands = new FakeCommands();
-    const prepare = realPrepareCwd(commands, registry(), resolveToken);
+    const prepare = realPrepareCwd(commands, registry());
 
     await prepare("acme/widgets", 42);
 
@@ -222,7 +222,7 @@ describe("realPrepareCwd", () => {
 
   it("throws a clear error when the repo is not registered", async () => {
     const commands = new FakeCommands();
-    const prepare = realPrepareCwd(commands, new RepoRegistry([]), resolveToken);
+    const prepare = realPrepareCwd(commands, new RepoRegistry([]));
 
     await expect(prepare("unknown/repo", 42)).rejects.toThrow(
       "repo-registry に未登録のリポジトリです",

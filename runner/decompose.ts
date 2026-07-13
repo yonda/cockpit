@@ -117,10 +117,6 @@ export async function runDecomposition(
 export function realPrepareCwd(
   commands: CommandRunner,
   registry: RepoRegistry,
-  // 現状 git/pnpm しか呼ばず gh 呼び出しが無いため未使用。将来 gh 呼び出しを
-  // 追加する際に config.tokenOwner と一緒に使う想定で受け取っておく (署名を
-  // main.ts の呼び出し側・WorkflowDeps と揃えるため)。
-  _resolveToken: (owner: string) => string,
 ) {
   return async (repo: string, issueNumber: number): Promise<PreparedCwd> => {
     const config = registry.resolve(repo);
