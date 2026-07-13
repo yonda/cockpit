@@ -1,9 +1,11 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import type { HerdrPane, HerdrStatus } from "@/lib/herdr/types";
+import type { HerdrStatus } from "@/lib/herdr/types";
 import { useHerdrContext } from "./useHerdrState";
+import { useJobsState } from "./useJobsState";
 import { playNotifySound } from "./notifySound";
+import { buildSessionToJob, planPaneNotify } from "./paneNotify";
 
 const PERMISSION_EVENT = "cockpit:permission-changed";
 
@@ -13,21 +15,15 @@ function isNeedsYou(
   return status === "blocked" || status === "done";
 }
 
-function notificationBody(pane: HerdrPane): string {
-  return (
-    pane.recap?.title ??
-    pane.recap?.lastPrompt ??
-    pane.agent ??
-    pane.paneId
-  );
-}
-
 
 // agent が Needs You (blocked / done) に遷移した瞬間にデスクトップ通知を出す。
 // データは SSE (useHerdrState) 由来なのでウィンドウが隠れていても発火する。
-// 通知クリックで該当 workspace を WezTerm でフォーカスする (/api/focus)。
+// pane.sessionId が HerdrExecutor ジョブに紐づくときはジョブ単位の escalation
+// (「JOB #N が要判断」) に振り分け、個人ペインは従来の汎用通知にする (paneNotify.ts)。
+// 通知クリックで該当ペインを WezTerm でフォーカスする (/api/focus)。
 export function AgentNotifyWatcher() {
   const { result } = useHerdrContext();
+  const { result: jobsResult } = useJobsState();
   const prevRef = useRef<Map<string, HerdrStatus> | null>(null);
   const permissionRef = useRef<NotificationPermission>("default");
 
@@ -64,8 +60,11 @@ export function AgentNotifyWatcher() {
     const labels = new Map(
       state.workspaces.map((w) => [w.workspaceId, w.label]),
     );
+    const sessionToJob = buildSessionToJob(
+      jobsResult.status === "ok" ? jobsResult.jobs : [],
+    );
 
-    let notified = false;
+    let soundPlayed = false;
     for (const pane of state.panes) {
       if (!pane.agent) continue;
       const status = pane.agentStatus;
@@ -73,35 +72,33 @@ export function AgentNotifyWatcher() {
       // すでに Needs You だった pane は再通知しない (blocked ↔ done の揺れも含む)
       if (isNeedsYou(prev.get(pane.paneId))) continue;
 
+      const job = pane.sessionId
+        ? sessionToJob.get(pane.sessionId)
+        : undefined;
       const label = labels.get(pane.workspaceId) ?? pane.workspaceId;
-      if (!notified) {
-        notified = true;
-        playNotifySound(status === "blocked" ? "needsYou" : "done");
+      const plan = planPaneNotify(pane, job, label);
+      if (!plan) continue; // ジョブ done 等はここでは鳴らさない (JobNotifyWatcher が担う)
+
+      if (!soundPlayed) {
+        soundPlayed = true;
+        playNotifySound(plan.sound);
       }
-      const n = new Notification(
-        status === "blocked"
-          ? `AGENT · ${label} — waiting for you`
-          : `AGENT · ${label} — done`,
-        {
-          body: notificationBody(pane),
-          icon: status === "blocked" ? "/notify-blocked.png" : "/notify-done.png",
-          tag: `cockpit:agent:${pane.paneId}:${status}`,
-          requireInteraction: false,
-        },
-      );
+      const n = new Notification(plan.title, {
+        body: plan.body,
+        icon: plan.icon,
+        tag: plan.tag,
+        requireInteraction: false,
+      });
       n.onclick = () => {
         void fetch("/api/focus", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            workspaceId: pane.workspaceId,
-            tabId: pane.tabId,
-          }),
+          body: JSON.stringify(plan.focus),
         });
         n.close();
       };
     }
-  }, [result]);
+  }, [result, jobsResult]);
 
   return null;
 }
