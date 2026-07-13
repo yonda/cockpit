@@ -139,6 +139,8 @@ case "${1:-}" in
                       echo "--- health ---"
                       command -v gh >/dev/null && gh auth status >/dev/null 2>&1 && echo "gh: ok" || echo "gh: NG (gh auth login)"
                       git wt >/dev/null 2>&1 && echo "git wt: ok" || echo "git wt: NG (brew install k1LoW/tap/git-wt)"
+                      # 構造ガード (Issue #54): runner は weak PAT が無いと起動しない (fail-closed)
+                      [[ -s "$HOME/.config/cockpit/runner-token" ]] && echo "runner-token: ok" || echo "runner-token: MISSING (~/.config/cockpit/runner-token に fine-grained PAT を配置)"
                       [[ -S "$HOME/.cache/cockpit/runner.sock" ]] && echo "socket: ok" || echo "socket: not listening" ;;
   runner-logs)        cmd_runner_logs ;;
   ""|help|-h|--help)  usage ;;

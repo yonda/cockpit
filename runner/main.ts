@@ -3,6 +3,7 @@ import { PBIS_DIR, PBI_POLL_INTERVAL_MS } from "../lib/pbi/types";
 import { realPrepareCwd } from "./decompose";
 import { RealCommandRunner } from "./exec";
 import { RealGitHubClient } from "./github";
+import { applyRunnerToken } from "./github-token";
 import { InputBroker } from "./input-broker";
 import { onJobUpdated, type PbiExecutorDeps } from "./pbi-executor";
 import { reconcileOnBoot } from "./pbi-boot";
@@ -19,6 +20,13 @@ import { JobStore } from "./store";
 const REPO_DIR = process.env.COCKPIT_REPO_DIR ?? process.cwd();
 
 function main(): void {
+  // 構造ガード (Issue #54): 何より先に weak PAT (yonda/cockpit 限定の
+  // fine-grained PAT) を GH_TOKEN へ積む。以降の gh 呼び出し (runner 自身の
+  // ポーリングと spawn したエージェント) はすべてこのトークンで動く。
+  // ファイルが無ければここで throw して起動しない (fail-closed。keyring の
+  // 強い classic token への silent fallback をしない)。
+  applyRunnerToken();
+
   const store = new JobStore(JOBS_DIR);
   store.loadAll();
   const broker = new InputBroker();

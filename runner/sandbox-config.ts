@@ -89,6 +89,9 @@ export function buildSandboxSettings(): SandboxSettings {
         { path: "~/.netrc", mode: "deny" },
       ],
       // 認証トークンを持つ環境変数はエージェントのプロセスから隠す。
+      // GH_TOKEN は意図的に deny しない: runner の boot (runner/github-token.ts,
+      // Issue #54) が積む yonda/cockpit 限定の weak PAT で、エージェントの gh に
+      // 使わせるためのもの。gh は GH_TOKEN > GITHUB_TOKEN > keyring の順で解決する。
       envVars: [
         { name: "GITHUB_TOKEN", mode: "deny" },
         { name: "ANTHROPIC_API_KEY", mode: "deny" },
