@@ -30,6 +30,7 @@ function makeOpts(overrides: Partial<ExecutorRunOpts> = {}): ExecutorRunOpts {
     cwd: "/wt/job",
     prompt: "implement issue #1",
     resumeSessionId: null,
+    githubToken: null,
     signal: new AbortController().signal,
     ...overrides,
   };
@@ -156,6 +157,13 @@ describe("HerdrExecutor.run", () => {
     await exec.run(makeOpts({ resumeSessionId: "prev-sid" }), makeHooks());
     expect(fakes.herdr.startCalls[0].resumeSessionId).toBe("prev-sid");
     expect(fakes.herdr.startCalls[0].prompt).toBe("implement issue #1");
+  });
+
+  it("githubToken を startAgent に渡す", async () => {
+    const fakes = makeFakes({});
+    const exec = new HerdrExecutor(makeDeps(fakes));
+    await exec.run(makeOpts({ githubToken: "tok-xyz" }), makeHooks());
+    expect(fakes.herdr.startCalls[0].githubToken).toBe("tok-xyz");
   });
 
   it("resume 時は履歴分を priming で読み飛ばし再生しない", async () => {

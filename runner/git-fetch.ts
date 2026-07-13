@@ -39,16 +39,21 @@ function isRefLockError(error: unknown): boolean {
   return typeof stderr === "string" && stderr.includes("cannot lock ref");
 }
 
-export async function fetchOriginMain(
+/**
+ * `git fetch origin <branch>` を repoDir 単位で直列化する。per-repo の
+ * baseBranch (main とは限らない) に対応するための汎用版。
+ */
+export async function fetchOrigin(
   commands: CommandRunner,
   repoDir: string,
+  branch: string,
   options: { sleep?: SleepFn } = {},
 ): Promise<void> {
   const sleep = options.sleep ?? defaultSleep;
   await fetchMutex.runExclusive(repoDir, async () => {
     for (let attempt = 0; ; attempt++) {
       try {
-        await commands.run("git", ["fetch", "origin", "main"], {
+        await commands.run("git", ["fetch", "origin", branch], {
           cwd: repoDir,
         });
         return;

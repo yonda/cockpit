@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { SubTaskRecord } from "../../lib/pbi/types";
 import { JobStore } from "../store";
 import { PbiStore } from "../pbi-store";
+import { RepoRegistry } from "../repo-registry";
 import { Scheduler } from "../scheduler";
 import { InputBroker } from "../input-broker";
 import type { PbiExecutorDeps } from "../pbi-executor";
@@ -32,7 +33,9 @@ beforeEach(() => {
   const scheduler = new Scheduler(
     { store: jobStore, broker: new InputBroker(),
       commands: { run: async () => ({ stdout: "", stderr: "" }) },
-      executor: { run: async () => ({ ok: true }) }, repoDir: "/repo" },
+      executor: { run: async () => ({ ok: true }) },
+      registry: new RepoRegistry([]),
+      resolveToken: () => "test-token" },
     { runJob: async (d, jobId) => { d.store.transition(jobId, "running"); } },
   );
   deps = { pbiStore, jobStore, scheduler };

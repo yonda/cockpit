@@ -39,15 +39,19 @@ export function subIssueBody(task: SubTask, proposed: boolean): string {
 export class RealGitHubClient implements GitHubClient {
   constructor(
     private readonly commands: CommandRunner,
-    private readonly repoDir: string,
+    private readonly resolveToken: (owner: string) => string,
   ) {}
 
-  private gh(args: string[]) {
-    return this.commands.run("gh", args, { cwd: this.repoDir });
+  private gh(repo: string, args: string[]) {
+    const owner = repo.split("/")[0];
+    return this.commands.run("gh", args, {
+      cwd: process.cwd(),
+      env: { GH_TOKEN: this.resolveToken(owner) },
+    });
   }
 
   async fetchIssue(repo: string, number: number) {
-    const { stdout } = await this.gh([
+    const { stdout } = await this.gh(repo, [
       "issue",
       "view",
       String(number),
@@ -62,7 +66,7 @@ export class RealGitHubClient implements GitHubClient {
 
   async createSubIssue(repo: string, parent: number, task: SubTask) {
     // 1) 子 Issue を作成（返り値に内部 id と number を含む REST を使う）
-    const { stdout } = await this.gh([
+    const { stdout } = await this.gh(repo, [
       "api",
       "--method",
       "POST",
@@ -78,7 +82,7 @@ export class RealGitHubClient implements GitHubClient {
       html_url: string;
     };
     // 2) 親にリンク（body の sub_issue_id は number ではなく内部 id）
-    await this.gh([
+    await this.gh(repo, [
       "api",
       "--method",
       "POST",
@@ -90,7 +94,7 @@ export class RealGitHubClient implements GitHubClient {
   }
 
   async updateIssueBody(repo: string, number: number, body: string) {
-    await this.gh([
+    await this.gh(repo, [
       "api",
       "--method",
       "PATCH",
@@ -101,14 +105,14 @@ export class RealGitHubClient implements GitHubClient {
   }
 
   async closeIssue(repo: string, number: number) {
-    await this.gh(["issue", "close", String(number), "--repo", repo]);
+    await this.gh(repo, ["issue", "close", String(number), "--repo", repo]);
   }
 
   async prStateForBranch(repo: string, branch: string): Promise<PrState> {
     // reviewThreads は `gh pr list`/`gh pr view` の JSON フィールドに存在しない
     // (GraphQL 概念)。list では state/url/number だけ取り、レビュースレッド数は
     // OPEN のときだけ graphql で別途取得する。
-    const { stdout } = await this.gh([
+    const { stdout } = await this.gh(repo, [
       "pr",
       "list",
       "--repo",
@@ -140,7 +144,7 @@ export class RealGitHubClient implements GitHubClient {
   private async reviewThreadCount(repo: string, number: number): Promise<number> {
     const [owner, name] = repo.split("/");
     try {
-      const { stdout } = await this.gh([
+      const { stdout } = await this.gh(repo, [
         "api",
         "graphql",
         "-f",

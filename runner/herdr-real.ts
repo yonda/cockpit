@@ -28,6 +28,15 @@ function shellQuote(s: string): string {
   return `'${s.replace(/'/g, `'\\''`)}'`;
 }
 
+// エラーメッセージ中に平文で紛れ込んだトークンを redact する。
+// execFile の失敗時、err.message/err.cmd には渡した argv がそのまま含まれるため、
+// startAgent が組み立てた `GH_TOKEN='<token>' ...` 文字列がログ・store・画面表示まで
+// 素通りしてしまう。token が null の場合は何もしない (redact 対象がないため)。
+export function redactToken(message: string, token: string | null): string {
+  if (!token) return message;
+  return message.split(token).join("***");
+}
+
 export class RealHerdrClient implements HerdrClient {
   async createPane(opts: {
     workspaceId: string;
@@ -56,15 +65,26 @@ export class RealHerdrClient implements HerdrClient {
       settingsPath: string;
       prompt: string;
       resumeSessionId: string | null;
+      githubToken: string | null;
     },
   ): Promise<void> {
     const resumeFlag = opts.resumeSessionId
       ? ` --resume ${shellQuote(opts.resumeSessionId)}`
       : "";
-    const launch = `cd ${shellQuote(opts.cwd)} && claude --settings ${shellQuote(
+    const tokenPrefix = opts.githubToken
+      ? `GH_TOKEN=${shellQuote(opts.githubToken)} `
+      : "";
+    const launch = `cd ${shellQuote(opts.cwd)} && ${tokenPrefix}claude --settings ${shellQuote(
       opts.settingsPath,
     )}${resumeFlag}`;
-    await herdr(["pane", "run", paneId, launch]);
+    try {
+      await herdr(["pane", "run", paneId, launch]);
+    } catch (err) {
+      // execFile の失敗時、err には launch (GH_TOKEN 平文込み) が argv として乗るため、
+      // job.error 経由で store・画面まで漏れる前にここで redact する。
+      const msg = err instanceof Error ? err.message : String(err);
+      throw new Error(redactToken(msg, opts.githubToken));
+    }
 
     // interactive な TUI が起動するのを待つ。footer の文言はバージョン差があるため
     // 複数候補を regex で待ち、駄目でも固定待ちにフォールバックする。

@@ -77,7 +77,11 @@ const makeDeps = (
   store,
   executor,
   github,
-  prepareCwd: async () => ({ cwd: scratch, cleanup: async () => {} }),
+  prepareCwd: async () => ({
+    cwd: scratch,
+    githubToken: "tok-acme",
+    cleanup: async () => {},
+  }),
 });
 
 describe("startDecomposition", () => {

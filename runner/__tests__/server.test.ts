@@ -8,6 +8,7 @@ import type { PbiRunnerEvent } from "../../lib/pbi/types";
 import { InputBroker } from "../input-broker";
 import { PbiStore } from "../pbi-store";
 import type { PbiServerDeps } from "../pbi-server";
+import { RepoRegistry } from "../repo-registry";
 import { Scheduler } from "../scheduler";
 import { startRunnerServer } from "../server";
 import { JobStore } from "../store";
@@ -33,7 +34,8 @@ beforeEach(() => {
       broker,
       commands: { run: async () => ({ stdout: "", stderr: "" }) },
       executor: { run: async () => ({ ok: true as const }) },
-      repoDir: dir,
+      registry: new RepoRegistry([]),
+      resolveToken: () => "test-token",
     },
     { runJob: () => new Promise<void>(() => {}) }, // ジョブは進めない
   );
@@ -51,7 +53,11 @@ beforeEach(() => {
         closeIssue: async () => {},
         prStateForBranch: async () => ({ kind: "none" as const }),
       },
-      prepareCwd: async () => ({ cwd: dir, cleanup: async () => {} }),
+      prepareCwd: async () => ({
+        cwd: dir,
+        githubToken: "tok-acme",
+        cleanup: async () => {},
+      }),
     },
     exec: { pbiStore, jobStore: store, scheduler },
   };

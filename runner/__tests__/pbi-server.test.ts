@@ -8,6 +8,7 @@ import type { SubTask } from "../../lib/pbi/types";
 import { InputBroker } from "../input-broker";
 import { JobStore } from "../store";
 import { PbiStore } from "../pbi-store";
+import { RepoRegistry } from "../repo-registry";
 import { Scheduler } from "../scheduler";
 import { handlePbiRequest, type PbiServerDeps } from "../pbi-server";
 
@@ -68,7 +69,8 @@ beforeEach(() => {
       broker: new InputBroker(),
       commands: { run: async () => ({ stdout: "", stderr: "" }) },
       executor: { run: async () => ({ ok: true as const }) },
-      repoDir: "/repo",
+      registry: new RepoRegistry([]),
+      resolveToken: () => "test-token",
     },
     {
       runJob: async (schedDeps, jobId) => {
@@ -85,7 +87,7 @@ beforeEach(() => {
       prepareCwd: async () => {
         const cwd = mkdtempSync(join(tmpdir(), "decomp-"));
         cwds.push(cwd);
-        return { cwd, cleanup: async () => {} };
+        return { cwd, githubToken: "tok-acme", cleanup: async () => {} };
       },
     },
     exec: { pbiStore, jobStore, scheduler },

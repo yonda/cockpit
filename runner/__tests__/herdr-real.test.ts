@@ -2,13 +2,31 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { encodeProjectDir, RealTranscriptReader } from "../herdr-real";
+import { encodeProjectDir, RealTranscriptReader, redactToken } from "../herdr-real";
 
 describe("encodeProjectDir", () => {
   it("非英数字を - に置換する (/ と . を含む)", () => {
     expect(encodeProjectDir("/Users/alice.b/src/cockpit")).toBe(
       "-Users-alice-b-src-cockpit",
     );
+  });
+});
+
+describe("redactToken", () => {
+  it("token を含むメッセージ中の全出現を *** に置換する", () => {
+    const token = "github_pat_secret123";
+    const message = `Command failed: herdr pane run p1 "GH_TOKEN=${token} claude" (cmd used ${token})`;
+    const redacted = redactToken(message, token);
+    expect(redacted).not.toContain(token);
+    expect(redacted).toContain("***");
+    expect(redacted).toBe(
+      `Command failed: herdr pane run p1 "GH_TOKEN=*** claude" (cmd used ***)`,
+    );
+  });
+
+  it("token が null のときはメッセージをそのまま返す", () => {
+    const message = "Command failed: herdr pane run p1 (no token)";
+    expect(redactToken(message, null)).toBe(message);
   });
 });
 

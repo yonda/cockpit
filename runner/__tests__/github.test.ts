@@ -34,6 +34,8 @@ describe("subIssueBody", () => {
   });
 });
 
+const resolveToken = (owner: string) => `tok-${owner}`;
+
 describe("RealGitHubClient.createSubIssue", () => {
   it("creates the child issue then links it via the sub_issues endpoint", async () => {
     const commands = new FakeCommands();
@@ -49,7 +51,7 @@ describe("RealGitHubClient.createSubIssue", () => {
     // 2) POST /issues/42/sub_issues -> 201 (本文不要)
     commands.responses.push({ stdout: "", stderr: "" });
 
-    const gh = new RealGitHubClient(commands, "/repo");
+    const gh = new RealGitHubClient(commands, resolveToken);
     const res = await gh.createSubIssue("yonda/cockpit", 42, task);
 
     expect(res).toEqual({
@@ -74,7 +76,7 @@ describe("RealGitHubClient.fetchIssue", () => {
       stdout: JSON.stringify({ title: "T", body: "B" }),
       stderr: "",
     });
-    const gh = new RealGitHubClient(commands, "/repo");
+    const gh = new RealGitHubClient(commands, resolveToken);
     const res = await gh.fetchIssue("yonda/cockpit", 42);
     expect(res).toEqual({ title: "T", body: "B" });
     expect(commands.calls[0].args).toContain("issue");
@@ -92,7 +94,7 @@ describe("RealGitHubClient.fetchIssue", () => {
       stdout: JSON.stringify({ title: "T", body: null }),
       stderr: "",
     });
-    const gh = new RealGitHubClient(commands, "/repo");
+    const gh = new RealGitHubClient(commands, resolveToken);
     const res = await gh.fetchIssue("yonda/cockpit", 42);
     expect(res).toEqual({ title: "T", body: "" });
   });
@@ -102,7 +104,7 @@ describe("RealGitHubClient.updateIssueBody", () => {
   it("updates issue body with PATCH request", async () => {
     const commands = new FakeCommands();
     commands.responses.push({ stdout: "", stderr: "" });
-    const gh = new RealGitHubClient(commands, "/repo");
+    const gh = new RealGitHubClient(commands, resolveToken);
     await gh.updateIssueBody("yonda/cockpit", 101, "new body");
     expect(commands.calls[0].args).toContain("api");
     expect(commands.calls[0].args).toContain("--method");
@@ -117,7 +119,7 @@ describe("RealGitHubClient.closeIssue", () => {
   it("closes issue with correct command args", async () => {
     const commands = new FakeCommands();
     commands.responses.push({ stdout: "", stderr: "" });
-    const gh = new RealGitHubClient(commands, "/repo");
+    const gh = new RealGitHubClient(commands, resolveToken);
     await gh.closeIssue("yonda/cockpit", 101);
     expect(commands.calls[0].args).toContain("issue");
     expect(commands.calls[0].args).toContain("close");
@@ -129,7 +131,7 @@ describe("RealGitHubClient.closeIssue", () => {
 
 describe("RealGitHubClient.prStateForBranch", () => {
   const gh = (commands: CommandRunner) =>
-    new RealGitHubClient(commands, "/repo");
+    new RealGitHubClient(commands, resolveToken);
 
   it("returns none when no PR exists", async () => {
     const commands = new FakeCommands();
@@ -196,5 +198,24 @@ describe("RealGitHubClient.prStateForBranch", () => {
       kind: "closed",
       url: "https://github.com/yonda/cockpit/pull/9",
     });
+  });
+});
+
+describe("RealGitHubClient token resolution", () => {
+  it("repo の owner トークンを解決して gh に渡す", async () => {
+    const calls: Array<{ env?: Record<string, string> }> = [];
+    const commands = {
+      run: async (
+        _c: string,
+        _a: string[],
+        opts: { cwd: string; env?: Record<string, string> },
+      ) => {
+        calls.push({ env: opts.env });
+        return { stdout: JSON.stringify({ title: "t", body: "b" }), stderr: "" };
+      },
+    };
+    const client = new RealGitHubClient(commands, (owner) => `tok-${owner}`);
+    await client.fetchIssue("acme/widget", 1);
+    expect(calls[0].env?.GH_TOKEN).toBe("tok-acme");
   });
 });

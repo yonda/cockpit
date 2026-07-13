@@ -9,16 +9,20 @@ export interface CommandRunner {
   run(
     cmd: string,
     args: string[],
-    opts: { cwd: string },
+    opts: { cwd: string; env?: Record<string, string> },
   ): Promise<RunResult>;
 }
 
 export class RealCommandRunner implements CommandRunner {
-  async run(cmd: string, args: string[], opts: { cwd: string }) {
+  async run(
+    cmd: string,
+    args: string[],
+    opts: { cwd: string; env?: Record<string, string> },
+  ) {
     const { stdout, stderr } = await execFileAsync(cmd, args, {
       cwd: opts.cwd,
       maxBuffer: 10 * 1024 * 1024,
-      env: process.env,
+      env: opts.env ? { ...process.env, ...opts.env } : process.env,
     });
     return { stdout, stderr };
   }

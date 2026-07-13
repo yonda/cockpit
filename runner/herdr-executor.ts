@@ -32,6 +32,7 @@ export interface HerdrClient {
       settingsPath: string;
       prompt: string;
       resumeSessionId: string | null;
+      githubToken: string | null;
     },
   ): Promise<void>;
   /** agent_status が done になるまで待つ。timeout したら false。 */
@@ -153,6 +154,7 @@ export class HerdrExecutor implements AgentExecutor {
           settingsPath: this.deps.settingsPath,
           prompt: opts.prompt,
           resumeSessionId: opts.resumeSessionId,
+          githubToken: opts.githubToken,
         });
 
         // session_id が現れるまで待つ (transcript 出現 = セッション開始)。

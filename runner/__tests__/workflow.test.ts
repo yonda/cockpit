@@ -7,6 +7,7 @@ import type {
   PendingInputResponse,
 } from "../../lib/jobs/types";
 import { InputBroker } from "../input-broker";
+import { RepoRegistry, type RepoConfig } from "../repo-registry";
 import { JobStore } from "../store";
 import type {
   AgentExecutor,
@@ -30,6 +31,16 @@ afterEach(() => rmSync(dir, { recursive: true, force: true }));
 /** コマンド呼び出しを記録し、シナリオに応じた stdout を返すフェイク */
 class FakeCommands implements CommandRunner {
   calls: string[] = [];
+  /**
+   * calls と並行して各呼び出しの opts (cwd/env) を記録する。CommandRunner.run の
+   * 実シグネチャどおり cwd/env を受け取り、per-repo 配線 (Task 6) を検証できるようにする。
+   */
+  callOpts: Array<{
+    cmd: string;
+    args: string[];
+    cwd: string;
+    env?: Record<string, string>;
+  }> = [];
   /** `gh pr list` が返す URL。null なら空配列を返す */
   prUrl: string | null = "https://github.com/yonda/cockpit/pull/9";
   /** `gh api .../comments` が返すコメント本文の配列 */
@@ -39,9 +50,14 @@ class FakeCommands implements CommandRunner {
   /** show-ref が成功扱いするブランチ (既存ブランチのシミュレート) */
   existingBranches = new Set<string>();
 
-  async run(cmd: string, args: string[], _opts: { cwd: string }) {
+  async run(
+    cmd: string,
+    args: string[],
+    opts: { cwd: string; env?: Record<string, string> },
+  ) {
     const line = [cmd, ...args].join(" ");
     this.calls.push(line);
+    this.callOpts.push({ cmd, args, cwd: opts.cwd, env: opts.env });
     if (cmd === "gh" && args[0] === "api") {
       return {
         stdout: JSON.stringify(this.issueComments.map((body) => ({ body }))),
@@ -126,6 +142,18 @@ class FakeExecutor implements AgentExecutor {
   }
 }
 
+/** テスト既定のリポジトリ設定。既存テストの cwd 期待値 (/tmp/cockpit, origin/main) を保つ */
+const DEFAULT_REPO_CONFIG: RepoConfig = {
+  repo: "yonda/cockpit",
+  path: "/tmp/cockpit",
+  baseBranch: "main",
+  tokenOwner: "yonda",
+};
+
+function makeRegistry(configs: RepoConfig[] = [DEFAULT_REPO_CONFIG]): RepoRegistry {
+  return new RepoRegistry(configs);
+}
+
 function makeDeps(overrides: Partial<WorkflowDeps> = {}): WorkflowDeps & {
   commands: FakeCommands;
   executor: FakeExecutor;
@@ -135,7 +163,8 @@ function makeDeps(overrides: Partial<WorkflowDeps> = {}): WorkflowDeps & {
     broker: new InputBroker(),
     commands: new FakeCommands(),
     executor: new FakeExecutor(),
-    repoDir: "/tmp/cockpit",
+    registry: makeRegistry(),
+    resolveToken: (_owner: string) => "test-token",
     ...overrides,
   } as WorkflowDeps & { commands: FakeCommands; executor: FakeExecutor };
 }
@@ -438,7 +467,11 @@ describe("runIssueJob", () => {
       maxActiveFetches = 0;
       fetchCount = 0;
 
-      async run(cmd: string, args: string[], opts: { cwd: string }) {
+      async run(
+        cmd: string,
+        args: string[],
+        opts: { cwd: string; env?: Record<string, string> },
+      ) {
         if (cmd === "git" && args[0] === "fetch") {
           this.fetchCount++;
           this.activeFetches++;
@@ -523,5 +556,72 @@ describe("runIssueJob", () => {
     expect(deps.commands.calls).toContain(
       "git worktree list --porcelain",
     );
+  });
+
+  it("未登録リポジトリのジョブは failed になる", async () => {
+    const deps = makeDeps({ registry: makeRegistry([]) }); // registry.resolve は常に null
+    const job = store.create({
+      repo: "acme/widget",
+      issueNumber: 1,
+      issueTitle: "test issue",
+      branch: "feature/1-test-issue",
+    });
+
+    await runIssueJob(deps, job.id, new AbortController().signal);
+
+    const final = store.get(job.id)!;
+    expect(final.status).toBe("failed");
+    expect(final.error).toMatch(/リポジトリが未登録です/);
+    expect(final.error).toMatch(/acme\/widget/);
+    // 未登録なので worktree もエージェント実行も走らない
+    expect(deps.commands.calls).toHaveLength(0);
+    expect(deps.executor.lastOpts).toBeNull();
+  });
+
+  it("worktree add が origin/<baseBranch> を起点にする", async () => {
+    const config: RepoConfig = {
+      repo: "acme/widget",
+      path: "/wt/x",
+      baseBranch: "develop",
+      tokenOwner: "acme",
+    };
+    const deps = makeDeps({ registry: makeRegistry([config]) });
+    const job = store.create({
+      repo: "acme/widget",
+      issueNumber: 1,
+      issueTitle: "test issue",
+      branch: "feature/1-test-issue",
+    });
+
+    await runIssueJob(deps, job.id, new AbortController().signal);
+
+    expect(store.get(job.id)!.status).toBe("done");
+    expect(deps.commands.calls).toContain("git fetch origin develop");
+    expect(
+      deps.commands.calls.some(
+        (c) =>
+          c.startsWith("git worktree add") &&
+          c.includes("feature/1-test-issue") &&
+          c.includes("origin/develop"),
+      ),
+    ).toBe(true);
+
+    // Task 6 の中心的な配線: git/gh コマンドは registry から解決した
+    // config.path を cwd に使う (デフォルト設定の /tmp/cockpit ではないこと)。
+    const gitAndGhCalls = deps.commands.callOpts.filter(
+      (c) => c.cmd === "git" || c.cmd === "gh",
+    );
+    expect(gitAndGhCalls.length).toBeGreaterThan(0);
+    for (const call of gitAndGhCalls) {
+      expect(call.cwd).toBe("/wt/x");
+    }
+
+    // gh 呼び出しには resolveToken が返したトークンが env.GH_TOKEN として
+    // 渡ること (実トークンではなくフェイクのプレースホルダで検証)。
+    const ghCalls = deps.commands.callOpts.filter((c) => c.cmd === "gh");
+    expect(ghCalls.length).toBeGreaterThan(0);
+    for (const call of ghCalls) {
+      expect(call.env?.GH_TOKEN).toBe("test-token");
+    }
   });
 });
