@@ -4,16 +4,18 @@ import * as path from "node:path";
 
 // 構造ガード (Issue #54): runner とその子プロセス (spawn したエージェントの gh) は
 // keyring の強い classic token (repo フルスコープ、アカウントが届く全 org に及ぶ) ではなく、
-// yonda/cockpit に限定した fine-grained PAT (weak token) で GitHub にアクセスする。
+// 対象リポジトリの owner に限定した fine-grained PAT (weak token) で GitHub にアクセスする。
 //
 // gh CLI はトークンを GH_TOKEN > GITHUB_TOKEN > keyring の優先順で解決するため、
-// runner の起動時に GH_TOKEN へ weak PAT を積めば、runner 自身の gh 呼び出し
-// (ポーリング・PBI 操作) と SDK が spawn するエージェントの gh の両方に効く。
-// GITHUB_TOKEN は sandbox の credentials.envVars でエージェントから隠している
+// ジョブ単位で resolveToken(owner) を呼び、その戻り値を GH_TOKEN として渡せば、
+// runner 自身の gh 呼び出し (ポーリング・PBI 操作) と SDK が spawn するエージェントの
+// gh の両方に効く。単一のグローバル GH_TOKEN を起動時に一度だけ積む方式 (旧
+// applyRunnerToken) は、複数 owner のリポジトリを扱うレジストリ駆動配線 (Task 8) で
+// 撤廃した。GITHUB_TOKEN は sandbox の credentials.envVars でエージェントから隠している
 // (runner/sandbox-config.ts) のに対し、GH_TOKEN は「エージェントに渡すための
 // 弱いトークン」なので意図的に隠さない。
 //
-// fail-closed: トークンファイルが無い・空の場合は起動を中止する。ここで黙って
+// fail-closed: トークンファイルが無い・空の場合はそのジョブを起動しない。ここで黙って
 // keyring の強いトークンに fall back すると、被害範囲の縮小という構造ガードの
 // 目的が silent に無効化されるため (sandbox-config.ts の failIfUnavailable と
 // 同じ思想)。
@@ -55,15 +57,6 @@ export function loadRunnerToken(filePath: string = DEFAULT_TOKEN_FILE): string {
     );
   }
   return token;
-}
-
-/**
- * weak PAT を env.GH_TOKEN に積む。runner の boot (main.ts) から一度だけ呼ぶ。
- * ファイルパスは COCKPIT_RUNNER_TOKEN_FILE で上書き可能 (テスト・開発用)。
- */
-export function applyRunnerToken(env: NodeJS.ProcessEnv = process.env): void {
-  const filePath = env.COCKPIT_RUNNER_TOKEN_FILE || DEFAULT_TOKEN_FILE;
-  env.GH_TOKEN = loadRunnerToken(filePath);
 }
 
 /**

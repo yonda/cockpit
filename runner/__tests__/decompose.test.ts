@@ -16,6 +16,7 @@ import {
   type DecomposeDeps,
   type PreparedCwd,
 } from "../decompose";
+import { RepoRegistry, type RepoConfig } from "../repo-registry";
 
 let scratch: string;
 beforeEach(() => {
@@ -176,11 +177,20 @@ describe("realPrepareCwd", () => {
     }
   }
 
+  const repoConfig: RepoConfig = {
+    repo: "acme/widgets",
+    path: "/repo",
+    baseBranch: "main",
+    tokenOwner: "acme",
+  };
+  const registry = () => new RepoRegistry([repoConfig]);
+  const resolveToken = () => "test-token";
+
   it("adds a detached worktree (no branch) so revise/re-fire never collides", async () => {
     const commands = new FakeCommands();
-    const prepare = realPrepareCwd(commands, "/repo");
+    const prepare = realPrepareCwd(commands, registry(), resolveToken);
 
-    const { cwd } = await prepare(42);
+    const { cwd } = await prepare("acme/widgets", 42);
 
     expect(cwd.endsWith("decomp/42")).toBe(true);
     const addCall = commands.calls.find(
@@ -191,11 +201,11 @@ describe("realPrepareCwd", () => {
     expect(addCall!.args).not.toContain("-b");
   });
 
-  it("fetches origin/main in the repoDir before adding the worktree", async () => {
+  it("fetches origin/<baseBranch> in the repoDir before adding the worktree", async () => {
     const commands = new FakeCommands();
-    const prepare = realPrepareCwd(commands, "/repo");
+    const prepare = realPrepareCwd(commands, registry(), resolveToken);
 
-    await prepare(42);
+    await prepare("acme/widgets", 42);
 
     const fetchIndex = commands.calls.findIndex(
       (c) =>
@@ -208,5 +218,14 @@ describe("realPrepareCwd", () => {
     );
     expect(fetchIndex).toBeGreaterThanOrEqual(0);
     expect(addIndex).toBeGreaterThan(fetchIndex);
+  });
+
+  it("throws a clear error when the repo is not registered", async () => {
+    const commands = new FakeCommands();
+    const prepare = realPrepareCwd(commands, new RepoRegistry([]), resolveToken);
+
+    await expect(prepare("unknown/repo", 42)).rejects.toThrow(
+      "repo-registry に未登録のリポジトリです",
+    );
   });
 });

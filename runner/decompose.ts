@@ -2,8 +2,9 @@ import { readFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import type { AgentExecutor } from "./executor";
 import type { CommandRunner } from "./exec";
-import { fetchOriginMain } from "./git-fetch";
+import { fetchOrigin } from "./git-fetch";
 import { isSubTaskArray, type SubTask } from "../lib/pbi/types";
+import type { RepoRegistry } from "./repo-registry";
 
 export const DECOMPOSITION_FILE = "decomposition.json";
 
@@ -11,9 +12,10 @@ export type PreparedCwd = { cwd: string; cleanup: () => Promise<void> };
 
 export type DecomposeDeps = {
   executor: AgentExecutor;
-  /** 分解を走らせる cwd を用意する。実運用は読み取り worktree を作り、cleanup で破棄する。
+  /** 分解を走らせる cwd を用意する（対象リポジトリはマルチレジストリの一つ）。
+      実運用は読み取り worktree を作り、cleanup で破棄する。
       テストは temp dir を返すフェイクを注入する（DI: マジックパス判定はしない）。 */
-  prepareCwd: (issueNumber: number) => Promise<PreparedCwd>;
+  prepareCwd: (repo: string, issueNumber: number) => Promise<PreparedCwd>;
 };
 
 export function buildDecomposePrompt(args: {
@@ -65,7 +67,7 @@ export async function runDecomposition(
     signal: AbortSignal;
   },
 ): Promise<{ ok: true; tasks: SubTask[] } | { ok: false; error: string }> {
-  const { cwd, cleanup } = await deps.prepareCwd(args.issueNumber);
+  const { cwd, cleanup } = await deps.prepareCwd(args.repo, args.issueNumber);
   try {
     const result = await deps.executor.run(
       {
@@ -108,15 +110,30 @@ export async function runDecomposition(
   }
 }
 
-/** 実運用の prepareCwd: origin/main から読み取り worktree を作り、cleanup で破棄する。
-    分解は読み取り専用の解析なのでブランチは作らない（detached HEAD）。
-    ブランチを作ると pbi.revise / 再 pbi.fire のたびに同名ブランチが残留して衝突する。 */
-export function realPrepareCwd(commands: CommandRunner, repoDir: string) {
-  return async (issueNumber: number): Promise<PreparedCwd> => {
+/** 実運用の prepareCwd: repo をレジストリから解決し、その config.baseBranch から
+    読み取り worktree を作って cleanup で破棄する。分解は読み取り専用の解析なので
+    ブランチは作らない（detached HEAD）。ブランチを作ると pbi.revise / 再 pbi.fire の
+    たびに同名ブランチが残留して衝突する。 */
+export function realPrepareCwd(
+  commands: CommandRunner,
+  registry: RepoRegistry,
+  // 現状 git/pnpm しか呼ばず gh 呼び出しが無いため未使用。将来 gh 呼び出しを
+  // 追加する際に config.tokenOwner と一緒に使う想定で受け取っておく (署名を
+  // main.ts の呼び出し側・WorkflowDeps と揃えるため)。
+  _resolveToken: (owner: string) => string,
+) {
+  return async (repo: string, issueNumber: number): Promise<PreparedCwd> => {
+    const config = registry.resolve(repo);
+    if (!config) {
+      throw new Error(
+        `repo-registry に未登録のリポジトリです: ${repo} (issue #${issueNumber})`,
+      );
+    }
+    const repoDir = config.path;
     const wtRoot = join(dirname(repoDir), `${basename(repoDir)}-wt`);
     const cwd = join(wtRoot, `decomp/${issueNumber}`);
     // 同一 repoDir への並行 fetch は ref lock を奪い合うため、共有ヘルパーで直列化する
-    await fetchOriginMain(commands, repoDir);
+    await fetchOrigin(commands, repoDir, config.baseBranch);
     // 前回クラッシュ等で残った worktree を掃除してから作り直す
     try {
       await commands.run("git", ["worktree", "remove", "--force", cwd], {
@@ -131,9 +148,13 @@ export function realPrepareCwd(commands: CommandRunner, repoDir: string) {
       // best-effort
     }
     // detached HEAD で作る（ブランチを作らない＝再実行でも衝突しない、リークもない）
-    await commands.run("git", ["worktree", "add", "--detach", cwd, "origin/main"], {
-      cwd: repoDir,
-    });
+    await commands.run(
+      "git",
+      ["worktree", "add", "--detach", cwd, `origin/${config.baseBranch}`],
+      { cwd: repoDir },
+    );
+    // git worktree / pnpm install はローカル操作で gh を呼ばないため GH_TOKEN は不要
+    // (workflow.ts の ensureWorktree と同じ扱い)。
     await commands.run("pnpm", ["install"], { cwd });
     return {
       cwd,

@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { applyRunnerToken, loadRunnerToken, resolveToken } from "../github-token";
+import { loadRunnerToken, resolveToken } from "../github-token";
 
 let dir: string;
 
@@ -39,28 +39,6 @@ describe("loadRunnerToken", () => {
     expect(() => loadRunnerToken(file)).toThrow(
       "トークン以外の内容が含まれています",
     );
-  });
-});
-
-describe("applyRunnerToken", () => {
-  it("COCKPIT_RUNNER_TOKEN_FILE のトークンを env.GH_TOKEN に積む", () => {
-    const file = path.join(dir, "token");
-    fs.writeFileSync(file, "github_pat_weak\n");
-    const env: NodeJS.ProcessEnv = {
-      NODE_ENV: "test",
-      COCKPIT_RUNNER_TOKEN_FILE: file,
-    };
-    applyRunnerToken(env);
-    expect(env.GH_TOKEN).toBe("github_pat_weak");
-  });
-
-  it("ファイルが読めなければ throw し GH_TOKEN を設定しない", () => {
-    const env: NodeJS.ProcessEnv = {
-      NODE_ENV: "test",
-      COCKPIT_RUNNER_TOKEN_FILE: path.join(dir, "missing"),
-    };
-    expect(() => applyRunnerToken(env)).toThrow("runner token file を読めません");
-    expect(env.GH_TOKEN).toBeUndefined();
   });
 });
 

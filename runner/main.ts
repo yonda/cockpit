@@ -3,7 +3,7 @@ import { PBIS_DIR, PBI_POLL_INTERVAL_MS } from "../lib/pbi/types";
 import { realPrepareCwd } from "./decompose";
 import { RealCommandRunner } from "./exec";
 import { RealGitHubClient } from "./github";
-import { applyRunnerToken } from "./github-token";
+import { resolveToken } from "./github-token";
 import type { AgentExecutor } from "./executor";
 import { buildHerdrExecutorFromEnv } from "./herdr-boot";
 import { InputBroker } from "./input-broker";
@@ -13,23 +13,20 @@ import type { LifecycleDeps } from "./pbi-lifecycle";
 import { startPoller } from "./pbi-poller";
 import type { PbiServerDeps } from "./pbi-server";
 import { PbiStore } from "./pbi-store";
+import { loadRegistry } from "./repo-registry";
 import { Scheduler } from "./scheduler";
 import { SdkExecutor } from "./sdk-executor";
 import { startRunnerServer } from "./server";
 import { JobStore } from "./store";
 
-// メインリポジトリの場所。launchd の WorkingDirectory がリポジトリルート。
-const REPO_DIR = process.env.COCKPIT_REPO_DIR ?? process.cwd();
-
 function main(): void {
-  // 構造ガード (Issue #54): 何より先に weak PAT (yonda/cockpit 限定の
-  // fine-grained PAT) を GH_TOKEN へ積む。以降の gh 呼び出し (runner 自身の
-  // ポーリングと spawn したエージェント) はすべてこのトークンで動く。
-  // ファイルが無ければここで throw して起動しない (fail-closed。keyring の
-  // 強い classic token への silent fallback をしない)。launchd の KeepAlive は
-  // 10 秒スロットルで再試行し続けるため、ファイルを配置すれば自動復旧する。
-  // 未配置のままのデプロイは bin/service の check_runner_token が preflight で防ぐ。
-  applyRunnerToken();
+  // 構造ガード (Issue #54): グローバル単一 GH_TOKEN の起動時セットは撤廃した
+  // (旧 applyRunnerToken)。マルチリポジトリ配線 (Task 8) では、ジョブ・分解ごとに
+  // repo-registry で対象リポジトリを解決し、その tokenOwner で resolveToken(owner)
+  // を呼んで owner 限定の fine-grained PAT を取得する (fail-closed: ファイルが
+  // 無ければそのジョブを失敗させる。keyring の強い classic token への silent
+  // fallback をしない)。
+  const registry = loadRegistry();
 
   const store = new JobStore(JOBS_DIR);
   store.loadAll();
@@ -43,7 +40,7 @@ function main(): void {
   // lifecycle 含む) を落とさず SdkExecutor に degrade する (herdr 経路だけ無効化)。
   let implementExecutor: AgentExecutor = new SdkExecutor();
   try {
-    implementExecutor = buildHerdrExecutorFromEnv(REPO_DIR) ?? implementExecutor;
+    implementExecutor = buildHerdrExecutorFromEnv() ?? implementExecutor;
   } catch (err) {
     console.error(
       `[runner] HerdrExecutor 構築に失敗したため SdkExecutor に degrade します: ${
@@ -59,19 +56,20 @@ function main(): void {
     broker,
     commands,
     executor: implementExecutor,
-    repoDir: REPO_DIR,
+    registry,
+    resolveToken,
   });
 
   // PBI オーケストレーション依存の配線。
   const pbiStore = new PbiStore(PBIS_DIR);
   pbiStore.loadAll();
-  const github = new RealGitHubClient(commands, REPO_DIR);
+  const github = new RealGitHubClient(commands, resolveToken);
   const exec: PbiExecutorDeps = { pbiStore, jobStore: store, scheduler, github };
   const lifecycle: LifecycleDeps = {
     store: pbiStore,
     executor: new SdkExecutor(),
     github,
-    prepareCwd: realPrepareCwd(commands, REPO_DIR),
+    prepareCwd: realPrepareCwd(commands, registry, resolveToken),
   };
   const pbi: PbiServerDeps = { pbiStore, lifecycle, exec };
 
@@ -93,7 +91,7 @@ function main(): void {
   startPoller({ pbiStore, github, exec }, PBI_POLL_INTERVAL_MS);
 
   console.log(
-    `[runner] listening on ${RUNNER_SOCKET_PATH} (repo: ${REPO_DIR}, jobs: ${JOBS_DIR}, pbis: ${PBIS_DIR})`,
+    `[runner] listening on ${RUNNER_SOCKET_PATH} (repos: ${registry.all().length}, jobs: ${JOBS_DIR}, pbis: ${PBIS_DIR})`,
   );
 }
 
