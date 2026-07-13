@@ -11,6 +11,7 @@ import type {
   ExecutorRunOpts,
 } from "./executor";
 import { evaluateToolUse } from "./permission-policy";
+import { buildSandboxSettings } from "./sandbox-config";
 
 // 許可判定は permission-policy (evaluateToolUse) に集約した。canUseTool が
 // default-allow で判定し、危険な操作 (保護ブランチへの push・force-push・
@@ -115,6 +116,15 @@ export class SdkExecutor implements AgentExecutor {
           permissionMode: "acceptEdits",
           disallowedTools: DISALLOWED_TOOLS,
           resume: opts.resumeSessionId ?? undefined,
+          // Seatbelt (sandbox) を全実行に適用する。SdkExecutor は scheduler の
+          // 実装ジョブと pbi-lifecycle の分解ジョブ (detached worktree での読み取り
+          // 解析 + decomposition.json 書き出し) の両方で共有される (runner/main.ts で
+          // それぞれに new SdkExecutor() を渡している) ため、ここに sandbox を配線すると
+          // 両経路のエージェント実行がまとめて sandbox 化される。
+          // buildSandboxSettings() は failIfUnavailable: true の fail-closed 構成で、
+          // かつ autoAllowBashIfSandboxed: false のため下の canUseTool が全 Bash に
+          // 効き続ける (Layer 0 判定は不変)。詳細は runner/sandbox-config.ts を参照。
+          sandbox: buildSandboxSettings(),
           // 実際の CanUseTool は (toolName, input, { signal, toolUseID, ... })
           // の3引数。3番目の control メタデータはここでは使わない。
           canUseTool: buildCanUseTool(hooks, opts.cwd),

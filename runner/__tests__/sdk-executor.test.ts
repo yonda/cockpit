@@ -1,7 +1,18 @@
 import { describe, expect, it, vi } from "vitest";
 import type { PendingInput, PendingInputResponse } from "../../lib/jobs/types";
-import type { ExecutorHooks } from "../executor";
-import { buildCanUseTool, toPermissionResult } from "../sdk-executor";
+import type { ExecutorHooks, ExecutorRunOpts } from "../executor";
+import { buildSandboxSettings } from "../sandbox-config";
+import {
+  buildCanUseTool,
+  SdkExecutor,
+  toPermissionResult,
+} from "../sdk-executor";
+
+// query は SDK の子プロセスを spawn するため、run() の options 配線を単体で
+// 検証できるようモック化する。既存の純関数テスト (toPermissionResult /
+// buildCanUseTool) は query を呼ばないので影響を受けない。
+const { mockQuery } = vi.hoisted(() => ({ mockQuery: vi.fn() }));
+vi.mock("@anthropic-ai/claude-agent-sdk", () => ({ query: mockQuery }));
 
 describe("toPermissionResult", () => {
   it("maps allow", () => {
@@ -180,5 +191,49 @@ describe("buildCanUseTool", () => {
         }),
       );
     });
+  });
+});
+
+describe("SdkExecutor.run が query の options を配線する", () => {
+  function makeRunOpts(): ExecutorRunOpts {
+    return {
+      cwd: WORKTREE,
+      prompt: "実装してください",
+      resumeSessionId: null,
+      signal: new AbortController().signal,
+    };
+  }
+
+  // init と result を流して即完了するフェイクストリーム。close() も生やす
+  // (run() が abort ハンドラで参照するため)。
+  function fakeStream() {
+    const iterator = (async function* () {
+      yield { type: "system", subtype: "init", session_id: "s1" };
+      yield { type: "result", subtype: "success", session_id: "s1" };
+    })();
+    return Object.assign(iterator, { close: vi.fn() });
+  }
+
+  it("options.sandbox に buildSandboxSettings() の結果を渡す (実装ジョブ・分解ジョブ共通経路)", async () => {
+    mockQuery.mockReturnValueOnce(fakeStream());
+    const { hooks } = makeHooks();
+
+    const result = await new SdkExecutor().run(makeRunOpts(), hooks);
+
+    expect(result).toEqual({ ok: true });
+    expect(mockQuery).toHaveBeenCalledTimes(1);
+    const options = mockQuery.mock.calls[0][0].options;
+    expect(options.sandbox).toEqual(buildSandboxSettings());
+  });
+
+  it("sandbox を足しても canUseTool の配線は不変 (Layer 0 判定を維持)", async () => {
+    mockQuery.mockReturnValueOnce(fakeStream());
+    const { hooks } = makeHooks();
+
+    await new SdkExecutor().run(makeRunOpts(), hooks);
+
+    const options = mockQuery.mock.calls[0][0].options;
+    expect(typeof options.canUseTool).toBe("function");
+    expect(options.permissionMode).toBe("acceptEdits");
   });
 });
