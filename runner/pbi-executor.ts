@@ -1,5 +1,6 @@
 // runner/pbi-executor.ts
 import type { Job } from "../lib/jobs/types";
+import type { GitHubClient } from "./github";
 import type { JobStore } from "./store";
 import type { PbiStore } from "./pbi-store";
 import type { Scheduler } from "./scheduler";
@@ -10,6 +11,11 @@ export type PbiExecutorDeps = {
   pbiStore: PbiStore;
   jobStore: JobStore;
   scheduler: Scheduler;
+  /**
+   * done_no_pr 遷移時に対応する sub-issue をクローズするための GitHub クライアント。
+   * poller の merged 経路と同じ対応を onJobUpdated 内で行う。未指定なら close をスキップする。
+   */
+  github?: GitHubClient;
 };
 
 export function dispatchReady(deps: PbiExecutorDeps, pbiId: string): void {
@@ -31,7 +37,10 @@ export function dispatchReady(deps: PbiExecutorDeps, pbiId: string): void {
   deps.scheduler.poke();
 }
 
-export function onJobUpdated(deps: PbiExecutorDeps, job: Job): void {
+export async function onJobUpdated(
+  deps: PbiExecutorDeps,
+  job: Job,
+): Promise<void> {
   // jobId 一致の sub-task を持つ PBI を探す
   const pbi = deps.pbiStore
     .list()
@@ -44,7 +53,24 @@ export function onJobUpdated(deps: PbiExecutorDeps, job: Job): void {
   const task = pbi.subTasks.find((t) => t.jobId === job.id);
   if (!task) return;
 
-  if (job.status === "done" && task.state === "running") {
+  if (job.status === "done" && task.state === "running" && job.noChanges) {
+    // PR なし完了 → in_review を経由せず done_no_pr（完了系終端）へ。
+    // failed 経由の task_failed を積まないので同一結論のリトライループが起きない。
+    deps.pbiStore.transitionSubTask(pbi.id, task.key, "done_no_pr");
+    // merged 時（poller）と同様に対応 sub-issue をクローズする。onJobUpdated は
+    // 再試行されないため、close 失敗で状態遷移や後続発射が止まらないよう best-effort。
+    if (task.issueNumber != null && deps.github) {
+      try {
+        await deps.github.closeIssue(pbi.repo, task.issueNumber);
+      } catch (err) {
+        console.error(
+          `[pbi-executor] closeIssue failed (${pbi.repo}#${task.issueNumber}): ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+      }
+    }
+  } else if (job.status === "done" && task.state === "running") {
     deps.pbiStore.transitionSubTask(pbi.id, task.key, "in_review", {
       prUrl: job.prUrl,
     });

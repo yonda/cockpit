@@ -35,7 +35,7 @@ function main(): void {
   const pbiStore = new PbiStore(PBIS_DIR);
   pbiStore.loadAll();
   const github = new RealGitHubClient(commands, REPO_DIR);
-  const exec: PbiExecutorDeps = { pbiStore, jobStore: store, scheduler };
+  const exec: PbiExecutorDeps = { pbiStore, jobStore: store, scheduler, github };
   const lifecycle: LifecycleDeps = {
     store: pbiStore,
     executor: new SdkExecutor(),
@@ -46,7 +46,15 @@ function main(): void {
 
   // Launch Pad ジョブの状態変化を PBI に反映（PR 作成 → in_review、以降のマージ
   // 検知はポーラーが担う）。
-  store.on("job", (job) => onJobUpdated(exec, job));
+  store.on("job", (job) => {
+    void onJobUpdated(exec, job).catch((err) => {
+      console.error(
+        `[runner] onJobUpdated failed (${job.id}): ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    });
+  });
 
   startRunnerServer(RUNNER_SOCKET_PATH, { store, scheduler, broker, pbi });
   scheduler.resumeOnBoot();
