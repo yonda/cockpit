@@ -25,7 +25,7 @@ bin/dev        # 開発サーバー
 
 ```bash
 pnpm build
-bin/service install            # next start を :3000 で常駐
+bin/service install            # next start を :7878 で常駐
 bin/service calendar-install   # カレンダー同期（5 分毎）
 bin/service status
 ```

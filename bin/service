@@ -91,7 +91,7 @@ status_agent() {
 cmd_install() {
   mkdir -p "$HOME/Library/Logs"
   install_agent "${PLIST_TEMPLATE}" "${LABEL}" "${PLIST_DEST}"
-  echo "launchd に登録しました。 http://localhost:${PORT:-3000}"
+  echo "launchd に登録しました。 http://localhost:${PORT:-7878}"
 }
 
 cmd_restart() {
