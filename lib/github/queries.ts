@@ -100,10 +100,14 @@ export const VIEWER_STATUS_QUERY = /* GraphQL */ `
   }
 `;
 
+// org: と user: の併記は OR — org 配下に加えて自分名義のリポジトリも対象にする
+export function buildRepoScope(org: string): string {
+  return `archived:false org:${org} user:@me`;
+}
+
 export function buildSearchQuery(
   role: "review-requested" | "author" | "reviewed-by",
   org: string,
 ): string {
-  // org: と user: の併記は OR — org 配下に加えて自分名義のリポジトリも対象にする
-  return `is:open is:pr ${role}:@me archived:false org:${org} user:@me`;
+  return `is:open is:pr ${role}:@me ${buildRepoScope(org)}`;
 }

@@ -1,5 +1,6 @@
 import { env } from "@/lib/env";
 import { graphql } from "./client";
+import { buildRepoScope } from "./queries";
 
 export const MY_ACTIVITY_QUERY = /* GraphQL */ `
   query MyActivity($q: String!) {
@@ -126,8 +127,9 @@ export type ActivityEvent = {
 };
 
 async function fetchByRole(role: "author" | "reviewed-by"): Promise<GraphQLPr[]> {
-  // org: と user: の併記は OR — org 配下に加えて自分名義のリポジトリも対象にする
-  const q = `is:pr ${role}:@me archived:false org:${env.githubOrg} user:@me updated:>=${daysAgoIso(30)}`;
+  // 結果が first:30 を超えるため sort:updated-desc で「直近更新順の 30 件」に固定する
+  // (デフォルトの best-match 順だとどの 30 件が返るか不定になる)
+  const q = `is:pr ${role}:@me ${buildRepoScope(env.githubOrg)} updated:>=${daysAgoIso(30)} sort:updated-desc`;
   const data = await graphql<SearchResponse>(MY_ACTIVITY_QUERY, {
     variables: { q },
     revalidate: 60,
