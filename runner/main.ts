@@ -24,7 +24,9 @@ function main(): void {
   // fine-grained PAT) を GH_TOKEN へ積む。以降の gh 呼び出し (runner 自身の
   // ポーリングと spawn したエージェント) はすべてこのトークンで動く。
   // ファイルが無ければここで throw して起動しない (fail-closed。keyring の
-  // 強い classic token への silent fallback をしない)。
+  // 強い classic token への silent fallback をしない)。launchd の KeepAlive は
+  // 10 秒スロットルで再試行し続けるため、ファイルを配置すれば自動復旧する。
+  // 未配置のままのデプロイは bin/service の check_runner_token が preflight で防ぐ。
   applyRunnerToken();
 
   const store = new JobStore(JOBS_DIR);

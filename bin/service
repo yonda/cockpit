@@ -118,6 +118,32 @@ cmd_runner_logs() {
   tail -f "$out_path" "$err_path"
 }
 
+# 構造ガード (Issue #54): runner は weak PAT (yonda/cockpit 限定の fine-grained PAT)
+# が無いと起動しない (fail-closed、runner/github-token.ts)。install / restart の前に
+# 同じ判定で preflight し、launchd 配下でのクラッシュループを未然に防ぐ。
+# 判定を runner の loadRunnerToken と揃える: 前後空白を除去して空、または内部に
+# 空白 (複数行・複数トークン) があれば NG。加えて GitHub API で有効性も検証する。
+check_runner_token() {
+  local file="${COCKPIT_RUNNER_TOKEN_FILE:-$HOME/.config/cockpit/runner-token}" tok
+  if [[ ! -f "${file}" ]]; then
+    echo "runner-token: MISSING (${file} に yonda/cockpit 限定の fine-grained PAT を配置してください)"
+    return 1
+  fi
+  tok="$(<"${file}")"
+  tok="${tok#"${tok%%[![:space:]]*}"}"
+  tok="${tok%"${tok##*[![:space:]]}"}"
+  if [[ -z "${tok}" || "${tok}" == *[[:space:]]* ]]; then
+    echo "runner-token: INVALID (空または複数行です: ${file})"
+    return 1
+  fi
+  if GH_TOKEN="${tok}" gh api rate_limit >/dev/null 2>&1; then
+    echo "runner-token: ok"
+  else
+    echo "runner-token: NG (GitHub API 認証に失敗 — トークンの失効・スコープを確認: ${file})"
+    return 1
+  fi
+}
+
 case "${1:-}" in
   install)            cmd_install ;;
   uninstall)          uninstall_agent "${LABEL}" "${PLIST_DEST}" ;;
@@ -130,17 +156,18 @@ case "${1:-}" in
   calendar-uninstall) uninstall_agent "${CAL_LABEL}" "${CAL_PLIST_DEST}" ;;
   calendar-status)    status_agent "${CAL_LABEL}" ;;
   runner-install)     [[ -f dist/runner.cjs ]] || { echo "先に pnpm build:runner を実行してください" >&2; exit 1; }
+                      check_runner_token >&2 || exit 1
                       install_agent "${RUNNER_PLIST_TEMPLATE}" "${RUNNER_LABEL}" "${RUNNER_PLIST_DEST}"
                       echo "runner を launchd に登録しました" ;;
   runner-uninstall)   uninstall_agent "${RUNNER_LABEL}" "${RUNNER_PLIST_DEST}" ;;
-  runner-restart)     launchctl kickstart -k "${DOMAIN_TARGET}/${RUNNER_LABEL}"
+  runner-restart)     check_runner_token >&2 || exit 1
+                      launchctl kickstart -k "${DOMAIN_TARGET}/${RUNNER_LABEL}"
                       echo "runner restarted" ;;
   runner-status)      status_agent "${RUNNER_LABEL}"
                       echo "--- health ---"
                       command -v gh >/dev/null && gh auth status >/dev/null 2>&1 && echo "gh: ok" || echo "gh: NG (gh auth login)"
                       git wt >/dev/null 2>&1 && echo "git wt: ok" || echo "git wt: NG (brew install k1LoW/tap/git-wt)"
-                      # 構造ガード (Issue #54): runner は weak PAT が無いと起動しない (fail-closed)
-                      [[ -s "$HOME/.config/cockpit/runner-token" ]] && echo "runner-token: ok" || echo "runner-token: MISSING (~/.config/cockpit/runner-token に fine-grained PAT を配置)"
+                      check_runner_token || true
                       [[ -S "$HOME/.cache/cockpit/runner.sock" ]] && echo "socket: ok" || echo "socket: not listening" ;;
   runner-logs)        cmd_runner_logs ;;
   ""|help|-h|--help)  usage ;;

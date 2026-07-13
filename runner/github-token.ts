@@ -18,7 +18,7 @@ import * as path from "node:path";
 // 目的が silent に無効化されるため (sandbox-config.ts の failIfUnavailable と
 // 同じ思想)。
 
-export const DEFAULT_TOKEN_FILE = path.join(
+const DEFAULT_TOKEN_FILE = path.join(
   os.homedir(),
   ".config",
   "cockpit",
@@ -42,6 +42,14 @@ export function loadRunnerToken(filePath: string = DEFAULT_TOKEN_FILE): string {
     throw new Error(
       `runner token file が空です: ${filePath} — ` +
         `yonda/cockpit 限定の fine-grained PAT を配置してください (Issue #54)`,
+    );
+  }
+  // 複数行・複数トークン (コメント行やローテーション時の書き足し等) は、fail-closed
+  // チェックを通過した後に gh の認証エラーとして遠い場所で表面化するため、ここで弾く。
+  if (/\s/.test(token)) {
+    throw new Error(
+      `runner token file にトークン以外の内容が含まれています: ${filePath} — ` +
+        `PAT 1 つだけを 1 行で配置してください (Issue #54)`,
     );
   }
   return token;
