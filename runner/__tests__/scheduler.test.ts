@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { InputBroker } from "../input-broker";
+import { RepoRegistry } from "../repo-registry";
 import { Scheduler } from "../scheduler";
 import { JobStore } from "../store";
 import type { WorkflowDeps } from "../workflow";
@@ -30,7 +31,8 @@ function makeDeps(): WorkflowDeps {
     broker: new InputBroker(),
     commands: { run: async () => ({ stdout: "", stderr: "" }) },
     executor: { run: async () => ({ ok: true as const }) },
-    repoDir: "/tmp/repo",
+    registry: new RepoRegistry([]),
+    resolveToken: () => "test-token",
   };
 }
 

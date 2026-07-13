@@ -7,6 +7,7 @@ import type { GitHubClient, PrState } from "../github";
 import type { SubTaskRecord } from "../../lib/pbi/types";
 import { JobStore } from "../store";
 import { PbiStore } from "../pbi-store";
+import { RepoRegistry } from "../repo-registry";
 import { Scheduler } from "../scheduler";
 import { InputBroker } from "../input-broker";
 import { pollOnce } from "../pbi-poller";
@@ -72,7 +73,8 @@ beforeEach(() => {
       broker: new InputBroker(),
       commands: { run: async () => ({ stdout: "", stderr: "" }) },
       executor: { run: async () => ({ ok: true }) },
-      repoDir: "/repo",
+      registry: new RepoRegistry([]),
+      resolveToken: () => "test-token",
     },
     { runJob: async (deps, jobId) => { deps.store.transition(jobId, "running"); } },
   );

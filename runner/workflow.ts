@@ -3,8 +3,9 @@ import { basename, dirname, join } from "node:path";
 import type { PendingInput } from "../lib/jobs/types";
 import { NO_CHANGES_MARKER } from "../lib/pbi/types";
 import type { AgentExecutor, CommandRunner } from "./executor";
-import { fetchOriginMain } from "./git-fetch";
+import { fetchOrigin } from "./git-fetch";
 import type { InputBroker } from "./input-broker";
+import type { RepoConfig, RepoRegistry } from "./repo-registry";
 import type { JobStore } from "./store";
 
 export type WorkflowDeps = {
@@ -12,8 +13,10 @@ export type WorkflowDeps = {
   broker: InputBroker;
   commands: CommandRunner;
   executor: AgentExecutor;
-  /** メインリポジトリの絶対パス (worktree 作成の起点) */
-  repoDir: string;
+  /** job.repo -> {path, baseBranch, tokenOwner} を解決するレジストリ */
+  registry: RepoRegistry;
+  /** owner 別の GitHub トークンを解決する (fail-closed: 失敗時は throw) */
+  resolveToken: (owner: string) => string;
 };
 
 export function buildBranchName(issueNumber: number, title: string): string {
@@ -76,14 +79,15 @@ function buildReviewReplyPrompt(args: {
  */
 async function checkNoChangesMarker(
   deps: WorkflowDeps,
-  repo: string,
+  config: RepoConfig,
+  githubToken: string,
   issueNumber: number,
 ): Promise<boolean> {
   try {
     const { stdout } = await deps.commands.run(
       "gh",
-      ["api", `/repos/${repo}/issues/${issueNumber}/comments`],
-      { cwd: deps.repoDir },
+      ["api", `/repos/${config.repo}/issues/${issueNumber}/comments`],
+      { cwd: config.path, env: { GH_TOKEN: githubToken } },
     );
     const comments = JSON.parse(stdout) as Array<{ body?: string }>;
     return comments.some((c) => (c.body ?? "").includes(NO_CHANGES_MARKER));
@@ -104,25 +108,27 @@ function findWorktreePath(porcelain: string, branch: string): string | null {
 
 async function ensureWorktree(
   deps: WorkflowDeps,
+  config: RepoConfig,
   branch: string,
 ): Promise<string> {
+  const repoDir = config.path;
   const list = async () => {
     const { stdout } = await deps.commands.run(
       "git",
       ["worktree", "list", "--porcelain"],
-      { cwd: deps.repoDir },
+      { cwd: repoDir },
     );
     return findWorktreePath(stdout, branch);
   };
 
-  // sub-task ブランチは origin/main を起点に作るため upstream が origin/main になる。
-  // ユーザーのグローバル push.default=tracking のままだと、エージェントの `git push` が
-  // feature ブランチではなく origin/main に飛び、draft PR ゲートを素通りして main を汚す
-  // (dogfood 2026-07-11 で実際に発生)。repo-local で push.default=current にすると、
-  // 各ブランチは同名リモートブランチに push される (main→main / feature/X→feature/X)。
+  // sub-task ブランチは origin/<baseBranch> を起点に作るため upstream が origin/<baseBranch>
+  // になる。ユーザーのグローバル push.default=tracking のままだと、エージェントの `git push` が
+  // feature ブランチではなく origin/<baseBranch> に飛び、draft PR ゲートを素通りしてベース
+  // ブランチを汚す (dogfood 2026-07-11 で実際に発生)。repo-local で push.default=current に
+  // すると、各ブランチは同名リモートブランチに push される (main→main / feature/X→feature/X)。
   // 明示 refspec (`git push origin HEAD:main`) には影響しない。idempotent。
   await deps.commands.run("git", ["config", "push.default", "current"], {
-    cwd: deps.repoDir,
+    cwd: repoDir,
   });
 
   const existing = await list();
@@ -131,22 +137,23 @@ async function ensureWorktree(
   // plain `git worktree add` で作る。`git wt` はユーザーのグローバル wt.hook
   // (`npm ci`) を継承し、pnpm リポジトリでは lockfile 不一致で失敗する。runner は
   // デーモンなので対話用フックに依存せず自己完結させる。配置は git-wt と同じ
-  // ../{repo}-wt/{branch}。起点は origin/main を明示 (ローカル main は worktree
-  // 運用では更新されない前提なので、直前の `git fetch origin main` を活かす)。
-  const wtRoot = join(dirname(deps.repoDir), `${basename(deps.repoDir)}-wt`);
+  // ../{repo}-wt/{branch}。起点は origin/<config.baseBranch> を明示 (ローカルの
+  // baseBranch は worktree 運用では更新されない前提なので、直前の
+  // `git fetch origin <baseBranch>` を活かす)。
+  const wtRoot = join(dirname(repoDir), `${basename(repoDir)}-wt`);
   const worktreePath = join(wtRoot, branch);
 
   const branchExists = await deps.commands
     .run("git", ["show-ref", "--verify", "--quiet", `refs/heads/${branch}`], {
-      cwd: deps.repoDir,
+      cwd: repoDir,
     })
     .then(() => true)
     .catch(() => false);
 
   const addArgs = branchExists
     ? ["worktree", "add", worktreePath, branch]
-    : ["worktree", "add", worktreePath, "-b", branch, "origin/main"];
-  await deps.commands.run("git", addArgs, { cwd: deps.repoDir });
+    : ["worktree", "add", worktreePath, "-b", branch, `origin/${config.baseBranch}`];
+  await deps.commands.run("git", addArgs, { cwd: repoDir });
 
   // node_modules は worktree にコピーされないので依存を入れる (git-wt の hook
   // が担っていた役割を明示的に肩代わり)。
@@ -173,13 +180,33 @@ export async function runIssueJob(
     deps.store.transition(jobId, "running");
   }
 
+  // repo config・token はここで解決する (fail-closed)。未登録リポジトリや
+  // トークン解決失敗はエージェント実行に進ませず即 failed にする。
+  const config = deps.registry.resolve(job.repo);
+  if (!config) {
+    deps.store.transition(jobId, "failed", {
+      error: `リポジトリが未登録です: ${job.repo} (~/.config/cockpit/repos.json に登録してください)`,
+    });
+    return;
+  }
+  let githubToken: string;
+  try {
+    githubToken = deps.resolveToken(config.tokenOwner);
+  } catch (err) {
+    deps.store.transition(jobId, "failed", {
+      error: `owner ${config.tokenOwner} のトークン解決に失敗: ${err instanceof Error ? err.message : String(err)}`,
+    });
+    return;
+  }
+  const ghEnv = { GH_TOKEN: githubToken };
+
   try {
     // 1. worktree 準備
     let worktreePath = job.worktreePath;
     if (!isResume) {
-      // 同一 repoDir への並行 fetch は ref lock を奪い合うため、共有ヘルパーで直列化する
-      await fetchOriginMain(deps.commands, deps.repoDir);
-      worktreePath = await ensureWorktree(deps, job.branch);
+      // 同一リポジトリへの並行 fetch は ref lock を奪い合うため、共有ヘルパーで直列化する
+      await fetchOrigin(deps.commands, config.path, config.baseBranch);
+      worktreePath = await ensureWorktree(deps, config, job.branch);
       deps.store.update(jobId, { worktreePath });
     }
 
@@ -194,7 +221,7 @@ export async function runIssueJob(
       const { stdout } = await deps.commands.run(
         "gh",
         ["issue", "view", String(job.issueNumber), "--json", "title"],
-        { cwd: deps.repoDir },
+        { cwd: config.path, env: ghEnv },
       );
       const issue = JSON.parse(stdout) as { title: string };
       prompt = buildReviewReplyPrompt({
@@ -206,7 +233,7 @@ export async function runIssueJob(
       const { stdout } = await deps.commands.run(
         "gh",
         ["issue", "view", String(job.issueNumber), "--json", "title,body"],
-        { cwd: deps.repoDir },
+        { cwd: config.path, env: ghEnv },
       );
       const issue = JSON.parse(stdout) as { title: string; body: string };
       prompt = buildPrompt({
@@ -223,7 +250,7 @@ export async function runIssueJob(
         cwd: worktreePath!,
         prompt,
         resumeSessionId: isResume ? job.sessionId : null,
-        githubToken: null, // TODO(Task 6): owner 別トークンを解決して渡す
+        githubToken,
         signal,
       },
       {
@@ -274,7 +301,7 @@ export async function runIssueJob(
         "--json",
         "url",
       ],
-      { cwd: deps.repoDir },
+      { cwd: config.path, env: ghEnv },
     );
     const prs = JSON.parse(stdout) as Array<{ url: string }>;
     if (prs.length === 0) {
@@ -284,7 +311,8 @@ export async function runIssueJob(
       // 自己申告ではなく、投稿済みコメントという検証可能なアーティファクトを見る。
       const hasNoChangesMarker = await checkNoChangesMarker(
         deps,
-        job.repo,
+        config,
+        githubToken,
         job.issueNumber,
       );
       if (hasNoChangesMarker) {

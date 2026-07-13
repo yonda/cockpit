@@ -7,6 +7,7 @@ import type {
   PendingInputResponse,
 } from "../../lib/jobs/types";
 import { InputBroker } from "../input-broker";
+import { RepoRegistry, type RepoConfig } from "../repo-registry";
 import { JobStore } from "../store";
 import type {
   AgentExecutor,
@@ -126,6 +127,18 @@ class FakeExecutor implements AgentExecutor {
   }
 }
 
+/** テスト既定のリポジトリ設定。既存テストの cwd 期待値 (/tmp/cockpit, origin/main) を保つ */
+const DEFAULT_REPO_CONFIG: RepoConfig = {
+  repo: "yonda/cockpit",
+  path: "/tmp/cockpit",
+  baseBranch: "main",
+  tokenOwner: "yonda",
+};
+
+function makeRegistry(configs: RepoConfig[] = [DEFAULT_REPO_CONFIG]): RepoRegistry {
+  return new RepoRegistry(configs);
+}
+
 function makeDeps(overrides: Partial<WorkflowDeps> = {}): WorkflowDeps & {
   commands: FakeCommands;
   executor: FakeExecutor;
@@ -135,7 +148,8 @@ function makeDeps(overrides: Partial<WorkflowDeps> = {}): WorkflowDeps & {
     broker: new InputBroker(),
     commands: new FakeCommands(),
     executor: new FakeExecutor(),
-    repoDir: "/tmp/cockpit",
+    registry: makeRegistry(),
+    resolveToken: (_owner: string) => "test-token",
     ...overrides,
   } as WorkflowDeps & { commands: FakeCommands; executor: FakeExecutor };
 }
@@ -523,5 +537,54 @@ describe("runIssueJob", () => {
     expect(deps.commands.calls).toContain(
       "git worktree list --porcelain",
     );
+  });
+
+  it("未登録リポジトリのジョブは failed になる", async () => {
+    const deps = makeDeps({ registry: makeRegistry([]) }); // registry.resolve は常に null
+    const job = store.create({
+      repo: "acme/widget",
+      issueNumber: 1,
+      issueTitle: "test issue",
+      branch: "feature/1-test-issue",
+    });
+
+    await runIssueJob(deps, job.id, new AbortController().signal);
+
+    const final = store.get(job.id)!;
+    expect(final.status).toBe("failed");
+    expect(final.error).toMatch(/リポジトリが未登録です/);
+    expect(final.error).toMatch(/acme\/widget/);
+    // 未登録なので worktree もエージェント実行も走らない
+    expect(deps.commands.calls).toHaveLength(0);
+    expect(deps.executor.lastOpts).toBeNull();
+  });
+
+  it("worktree add が origin/<baseBranch> を起点にする", async () => {
+    const config: RepoConfig = {
+      repo: "acme/widget",
+      path: "/wt/x",
+      baseBranch: "develop",
+      tokenOwner: "acme",
+    };
+    const deps = makeDeps({ registry: makeRegistry([config]) });
+    const job = store.create({
+      repo: "acme/widget",
+      issueNumber: 1,
+      issueTitle: "test issue",
+      branch: "feature/1-test-issue",
+    });
+
+    await runIssueJob(deps, job.id, new AbortController().signal);
+
+    expect(store.get(job.id)!.status).toBe("done");
+    expect(deps.commands.calls).toContain("git fetch origin develop");
+    expect(
+      deps.commands.calls.some(
+        (c) =>
+          c.startsWith("git worktree add") &&
+          c.includes("feature/1-test-issue") &&
+          c.includes("origin/develop"),
+      ),
+    ).toBe(true);
   });
 });
