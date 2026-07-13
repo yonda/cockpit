@@ -3,7 +3,16 @@ import {
   canPbiTransition,
   canSubTaskTransition,
   isSubTaskArray,
+  NO_CHANGES_MARKER,
+  SUBTASK_MARKER,
 } from "../../lib/pbi/types";
+
+describe("markers", () => {
+  it("exports distinct html-comment markers", () => {
+    expect(NO_CHANGES_MARKER).toBe("<!-- cockpit:no-changes -->");
+    expect(NO_CHANGES_MARKER).not.toBe(SUBTASK_MARKER);
+  });
+});
 
 describe("canPbiTransition", () => {
   it("allows decomposing -> awaiting_approval and the revise loop", () => {
@@ -36,6 +45,16 @@ describe("canSubTaskTransition", () => {
   });
   it("allows failed -> pending for retry / boot reconciliation", () => {
     expect(canSubTaskTransition("failed", "pending")).toBe(true);
+  });
+  it("allows running -> done_no_pr (差分なし完了) but not from other states", () => {
+    expect(canSubTaskTransition("running", "done_no_pr")).toBe(true);
+    expect(canSubTaskTransition("pending", "done_no_pr")).toBe(false);
+    expect(canSubTaskTransition("in_review", "done_no_pr")).toBe(false);
+  });
+  it("treats done_no_pr as a terminal state", () => {
+    expect(canSubTaskTransition("done_no_pr", "running")).toBe(false);
+    expect(canSubTaskTransition("done_no_pr", "merged")).toBe(false);
+    expect(canSubTaskTransition("done_no_pr", "failed")).toBe(false);
   });
   it("rejects transitions out of terminal states", () => {
     expect(canSubTaskTransition("merged", "running")).toBe(false);

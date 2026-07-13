@@ -13,6 +13,12 @@ export const PBI_POLL_INTERVAL_MS = Number(
 /** sub-issue 本文の冒頭に置く「確定前」マーカー。承認時に取り除く。 */
 export const SUBTASK_MARKER = "<!-- cockpit:proposed -->";
 
+/**
+ * ジョブ出力に現れる「差分なしで完了した」ことを示すマーカー。
+ * これを検知したタスクは PR を作らず done_no_pr へ遷移する。
+ */
+export const NO_CHANGES_MARKER = "<!-- cockpit:no-changes -->";
+
 // ---- PBI 状態機械 -------------------------------------------------------
 
 export type PbiStatus =
@@ -43,15 +49,17 @@ export type SubTaskState =
   | "running" // Launch Pad ジョブ実行中
   | "in_review" // PR 作成済み・人間のマージ待ち
   | "merged" // PR マージ済み → 完了
+  | "done_no_pr" // 差分なしで完了（PR なし）→ 完了扱い
   | "failed" // ジョブ失敗 / PR がマージなしクローズ → エスカレーション
   | "skipped"; // 人間がスキップ指示
 
 const SUBTASK_TRANSITIONS: Record<SubTaskState, readonly SubTaskState[]> = {
   pending: ["running", "skipped", "failed"],
-  running: ["in_review", "failed", "skipped"],
+  running: ["in_review", "done_no_pr", "failed", "skipped"],
   in_review: ["merged", "failed", "skipped"],
   failed: ["running", "pending", "skipped"], // 失敗 → リトライ / スキップ
   merged: [],
+  done_no_pr: [], // 終端（PR なし完了）
   skipped: [],
 };
 
