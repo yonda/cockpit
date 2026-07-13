@@ -32,4 +32,4 @@ if [[ ! -d .next ]]; then
   pnpm build
 fi
 
-exec pnpm exec next start --hostname 127.0.0.1 --port "${PORT:-3000}"
+exec pnpm exec next start --hostname 127.0.0.1 --port "${PORT:-7878}"

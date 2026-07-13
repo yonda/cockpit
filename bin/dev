@@ -8,4 +8,9 @@ gh auth status >/dev/null 2>&1 || { echo "gh auth login を先に実行してく
 [[ -f .env.local ]] || { echo ".env.local が無いです。cp .env.local.example .env.local して GITHUB_ORG を書いてください" >&2; exit 1; }
 
 export GITHUB_TOKEN="$(gh auth token)"
+
+# 既定ポートは 7878（3000 は他の開発環境と衝突しやすい）。PORT env で上書き可能。
+# --port を "$@" の前に固定注入すると `bin/dev --port 4000` が重複フラグになるため、
+# フラグではなく PORT env で既定を与える（Next は `-p`/`PORT` env の両対応）。
+export PORT="${PORT:-7878}"
 exec pnpm next dev "$@"

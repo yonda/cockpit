@@ -3,9 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
+    "dev": "next dev -p 7878",
     "build": "next build",
-    "start": "next start",
+    "start": "next start -p 7878",
     "build:runner": "esbuild runner/main.ts --bundle --platform=node --target=node20 --format=cjs --outfile=dist/runner.cjs --external:@anthropic-ai/claude-agent-sdk",
     "lint": "eslint",
     "test": "vitest run",
