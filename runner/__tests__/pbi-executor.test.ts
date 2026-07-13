@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { Job } from "../../lib/jobs/types";
 import type { SubTaskRecord } from "../../lib/pbi/types";
+import type { GitHubClient } from "../github";
 import { JobStore } from "../store";
 import { PbiStore } from "../pbi-store";
 import { Scheduler } from "../scheduler";
@@ -20,6 +21,22 @@ let pbisDir: string;
 let jobStore: JobStore;
 let pbiStore: PbiStore;
 let deps: PbiExecutorDeps;
+
+/** 既定でエラーを投げるスタブ GitHubClient。必要なメソッドだけ差し替える。 */
+const fakeGithub = (over: Partial<GitHubClient> = {}): GitHubClient => ({
+  fetchIssue: async () => {
+    throw new Error("not implemented");
+  },
+  createSubIssue: async () => {
+    throw new Error("not implemented");
+  },
+  updateIssueBody: async () => {
+    throw new Error("not implemented");
+  },
+  closeIssue: async () => {},
+  prStateForBranch: async () => ({ kind: "none" }),
+  ...over,
+});
 
 const rec = (over: Partial<SubTaskRecord>): SubTaskRecord => ({
   key: "t1",
@@ -107,7 +124,7 @@ describe("onJobUpdated", () => {
     return pbiStore.get(pbi.id)!;
   };
 
-  it("moves the sub-task to in_review on job done and records the PR url", () => {
+  it("moves the sub-task to in_review on job done and records the PR url", async () => {
     const pbi = setup();
     const jobId = pbiStore.get(pbi.id)!.subTasks[0].jobId!;
     // setup() の dispatchReady で fake scheduler が既に queued→running 済み
@@ -119,27 +136,82 @@ describe("onJobUpdated", () => {
     };
     void job;
 
-    onJobUpdated(deps, done);
+    await onJobUpdated(deps, done);
 
     const t1 = pbiStore.get(pbi.id)!.subTasks[0];
     expect(t1.state).toBe("in_review");
     expect(t1.prUrl).toBe("https://github.com/yonda/cockpit/pull/9");
   });
 
-  it("marks the sub-task failed and escalates on job failure", () => {
+  it("moves the sub-task to done_no_pr on a no-changes done job, without escalation, and closes the sub-issue", async () => {
+    const closed: Array<{ repo: string; number: number }> = [];
+    const github = fakeGithub({
+      closeIssue: async (repo, number) => {
+        closed.push({ repo, number });
+      },
+    });
+    // t1（noChanges で完了）→ done_no_pr、後続 t2 が発射されることを確認する。
+    const pbi = pbiStore.create({ repo: "r", issueNumber: 42, title: "P" });
+    pbiStore.transition(pbi.id, "awaiting_approval");
+    pbiStore.transition(pbi.id, "executing");
+    pbiStore.setSubTasks(pbi.id, [
+      rec({ key: "t1", issueNumber: 100, branch: "feature/100-t" }),
+      rec({
+        key: "t2",
+        issueNumber: 101,
+        branch: "feature/101-t",
+        dependsOn: ["t1"],
+      }),
+    ]);
+    dispatchReady(deps, pbi.id);
+    const jobId = pbiStore.get(pbi.id)!.subTasks.find((t) => t.key === "t1")!
+      .jobId!;
+    const done = jobStore.transition(jobId, "done", { noChanges: true });
+
+    await onJobUpdated({ ...deps, github }, done);
+
+    const after = pbiStore.get(pbi.id)!;
+    const t1 = after.subTasks.find((t) => t.key === "t1")!;
+    const t2 = after.subTasks.find((t) => t.key === "t2")!;
+    expect(t1.state).toBe("done_no_pr");
+    expect(t1.prUrl).toBeNull();
+    // task_failed エスカレーションは積まれない
+    expect(after.escalations).toHaveLength(0);
+    // 対応 sub-issue がクローズされる（merged 経路と同様）
+    expect(closed).toEqual([{ repo: "r", number: 100 }]);
+    // 依存していた後続タスクが発射される
+    expect(t2.state).toBe("running");
+    expect(t2.jobId).not.toBeNull();
+  });
+
+  it("completes the PBI when the only sub-task finishes with a no-changes done job", async () => {
+    const pbi = setup(); // t1 のみ、running 状態
+    const jobId = pbiStore.get(pbi.id)!.subTasks[0].jobId!;
+    const done = jobStore.transition(jobId, "done", { noChanges: true });
+
+    await onJobUpdated({ ...deps, github: fakeGithub() }, done);
+
+    const after = pbiStore.get(pbi.id)!;
+    expect(after.subTasks[0].state).toBe("done_no_pr");
+    expect(after.status).toBe("completed");
+  });
+
+  it("marks the sub-task failed and escalates on job failure", async () => {
     const pbi = setup();
     const jobId = pbiStore.get(pbi.id)!.subTasks[0].jobId!;
     // setup() の dispatchReady で fake scheduler が既に queued→running 済み
     const failed = jobStore.transition(jobId, "failed", { error: "boom" });
 
-    onJobUpdated(deps, failed);
+    await onJobUpdated(deps, failed);
 
     const after = pbiStore.get(pbi.id)!;
     expect(after.subTasks[0].state).toBe("failed");
     expect(after.escalations.map((e) => e.kind)).toContain("task_failed");
+    // noChanges でない失敗ジョブは従来どおり done_no_pr にしない
+    expect(after.subTasks[0].state).not.toBe("done_no_pr");
   });
 
-  it("keeps an in_review sub-task in_review when its (review-reply) job fails, adding an escalation", () => {
+  it("keeps an in_review sub-task in_review when its (review-reply) job fails, adding an escalation", async () => {
     const pbi = pbiStore.create({ repo: "r", issueNumber: 42, title: "P" });
     pbiStore.transition(pbi.id, "awaiting_approval");
     pbiStore.transition(pbi.id, "executing");
@@ -160,7 +232,7 @@ describe("onJobUpdated", () => {
     jobStore.transition(replyJob.id, "running");
     const failed = jobStore.transition(replyJob.id, "failed", { error: "reply boom" });
 
-    onJobUpdated(deps, failed);
+    await onJobUpdated(deps, failed);
 
     const t1 = pbiStore.get(pbi.id)!.subTasks[0];
     expect(t1.state).toBe("in_review"); // failed にしない
