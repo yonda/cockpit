@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { basename, dirname, join } from "node:path";
 import type { PendingInput } from "../lib/jobs/types";
+import { NO_CHANGES_MARKER } from "../lib/pbi/types";
 import type { AgentExecutor, CommandRunner } from "./executor";
 import { fetchOriginMain } from "./git-fetch";
 import type { InputBroker } from "./input-broker";
@@ -43,7 +44,8 @@ function buildPrompt(args: {
     `- 最後に \`gh pr create --draft\` で draft PR を作成してください`,
     `- コミットメッセージにも PR 本文にも closing keyword (\`close\`/\`fixes\`/\`resolves\` などに続けて番号) を書かないこと。Issue のクローズはマージ後に人間または上位のマージ検知が行います (push だけで Issue が早期クローズすると、上位のマージ検知が壊れるため)。関連付けが必要なら PR 本文に "refs #${args.issueNumber}" と書いてください`,
     "- セルフレビュー用のスキル (/code-review 等) は実行しないでください。実装 → テスト/lint → コミット → push → draft PR に集中してください (レビューは別レイヤーの責務です)",
-    "- draft PR の作成まで完了したら終了してください",
+    `- ただし検証の結果、コード変更が不要だと結論した場合は PR を作らないでください。代わりに、なぜ変更が不要と判断したのか（確認した箇所・根拠）を検証エビデンスとしてまとめ、担当 Issue #${args.issueNumber} に \`gh issue comment ${args.issueNumber}\` でコメント投稿してください。そのコメント本文には必ずマーカー文字列 \`${NO_CHANGES_MARKER}\` をそのまま含めること (runner がこのマーカーの有無で「差分なし完了」を機械的に検証します)。このコメントを投稿したら PR を作らずに終了してください`,
+    "- 完了条件は「draft PR の作成」または「上記の no-changes マーカー付きコメントの投稿」のどちらかです",
   ].join("\n");
 }
 
@@ -64,6 +66,30 @@ function buildReviewReplyPrompt(args: {
     "- セルフレビュー用のスキル (/code-review 等) は実行しないでください",
     "- 対応と返信まで終えたら終了してください",
   ].join("\n");
+}
+
+/**
+ * 担当 Issue のコメントを gh api で取得し、NO_CHANGES_MARKER を含むものが
+ * あるか外部検証する。エージェントの自己申告ではなく、投稿済みコメントという
+ * 検証可能なアーティファクトを確認する。取得に失敗した場合は「マーカーなし」
+ * 扱い (= 従来どおり failed) にフォールバックする。
+ */
+async function checkNoChangesMarker(
+  deps: WorkflowDeps,
+  repo: string,
+  issueNumber: number,
+): Promise<boolean> {
+  try {
+    const { stdout } = await deps.commands.run(
+      "gh",
+      ["api", `/repos/${repo}/issues/${issueNumber}/comments`],
+      { cwd: deps.repoDir },
+    );
+    const comments = JSON.parse(stdout) as Array<{ body?: string }>;
+    return comments.some((c) => (c.body ?? "").includes(NO_CHANGES_MARKER));
+  } catch {
+    return false;
+  }
 }
 
 /** git worktree list --porcelain の出力から branch -> path を引く */
@@ -161,7 +187,8 @@ export async function runIssueJob(
     let prompt: string;
     if (isResume) {
       prompt =
-        "runner プロセスの再起動から復帰しました。直前の作業状態 (git status とここまでの会話) を確認し、Issue の実装を続行してください。完了条件は変わらず draft PR の作成までです。" +
+        "runner プロセスの再起動から復帰しました。直前の作業状態 (git status とここまでの会話) を確認し、Issue の実装を続行してください。" +
+        `完了条件は「draft PR の作成」または「コード変更が不要と結論した場合に担当 Issue #${job.issueNumber} へマーカー文字列 ${NO_CHANGES_MARKER} を含む検証エビデンスコメントを投稿すること」のどちらかです (差分なし完了は gh issue comment ${job.issueNumber} で投稿し、PR は作りません)。` +
         "なお、コミットメッセージにも PR 本文にも closing keyword (close/fixes/resolves などに続けて番号) を書かないでください。Issue のクローズはマージ後に人間または上位のマージ検知が行います。関連付けが必要なら PR 本文に refs で参照してください。";
     } else if (job.kind === "review_reply") {
       const { stdout } = await deps.commands.run(
@@ -250,6 +277,19 @@ export async function runIssueJob(
     );
     const prs = JSON.parse(stdout) as Array<{ url: string }>;
     if (prs.length === 0) {
+      // PR が無くても即失敗にしない。エージェントが「差分なし完了」を宣言した
+      // 可能性があるので、担当 Issue のコメントを gh api で外部検証し、
+      // NO_CHANGES_MARKER 付きのエビデンスがあれば done (PR なし完了) にする。
+      // 自己申告ではなく、投稿済みコメントという検証可能なアーティファクトを見る。
+      const hasNoChangesMarker = await checkNoChangesMarker(
+        deps,
+        job.repo,
+        job.issueNumber,
+      );
+      if (hasNoChangesMarker) {
+        deps.store.transition(jobId, "done", { prUrl: null, noChanges: true });
+        return;
+      }
       deps.store.transition(jobId, "failed", {
         error: "エージェント終了後に draft PR が見つかりませんでした",
       });

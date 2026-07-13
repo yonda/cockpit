@@ -15,6 +15,7 @@ import type {
   ExecutorRunOpts,
 } from "../executor";
 import { buildBranchName, runIssueJob, type WorkflowDeps } from "../workflow";
+import { NO_CHANGES_MARKER } from "../../lib/pbi/types";
 
 let dir: string;
 let store: JobStore;
@@ -31,6 +32,8 @@ class FakeCommands implements CommandRunner {
   calls: string[] = [];
   /** `gh pr list` が返す URL。null なら空配列を返す */
   prUrl: string | null = "https://github.com/yonda/cockpit/pull/9";
+  /** `gh api .../comments` が返すコメント本文の配列 */
+  issueComments: string[] = [];
   /** 作成済み worktree のセット (git worktree add が呼ばれたブランチ) */
   createdWorktrees = new Set<string>();
   /** show-ref が成功扱いするブランチ (既存ブランチのシミュレート) */
@@ -39,6 +42,12 @@ class FakeCommands implements CommandRunner {
   async run(cmd: string, args: string[], _opts: { cwd: string }) {
     const line = [cmd, ...args].join(" ");
     this.calls.push(line);
+    if (cmd === "gh" && args[0] === "api") {
+      return {
+        stdout: JSON.stringify(this.issueComments.map((body) => ({ body }))),
+        stderr: "",
+      };
+    }
     if (cmd === "gh" && args[0] === "issue") {
       return {
         stdout: JSON.stringify({ title: "test issue", body: "本文です" }),
@@ -258,6 +267,67 @@ describe("runIssueJob", () => {
     const final = store.get(job.id)!;
     expect(final.status).toBe("failed");
     expect(final.error).toMatch(/draft PR/);
+  });
+
+  it("instructs how to declare no-changes with the marker comment", async () => {
+    const deps = makeDeps();
+    const job = store.create({
+      repo: "yonda/cockpit",
+      issueNumber: 7,
+      issueTitle: "test issue",
+      branch: "feature/7-test-issue",
+    });
+
+    await runIssueJob(deps, job.id, new AbortController().signal);
+
+    const prompt = deps.executor.lastOpts!.prompt;
+    // buildPrompt に「変更不要なら PR を作らずマーカー付きコメントを投稿」指示がある
+    expect(prompt).toContain(NO_CHANGES_MARKER);
+    expect(prompt).toMatch(/gh issue comment/);
+  });
+
+  it("transitions to done (noChanges) when the issue has a marker comment but no PR", async () => {
+    const deps = makeDeps();
+    deps.commands.prUrl = null; // draft PR は見つからない
+    deps.commands.issueComments = [
+      `検証しました。既に対応済みのため差分は不要です。\n${NO_CHANGES_MARKER}`,
+    ];
+    const job = store.create({
+      repo: "yonda/cockpit",
+      issueNumber: 1,
+      issueTitle: "test issue",
+      branch: "feature/1-test-issue",
+    });
+
+    await runIssueJob(deps, job.id, new AbortController().signal);
+
+    const final = store.get(job.id)!;
+    expect(final.status).toBe("done");
+    expect(final.noChanges).toBe(true);
+    expect(final.prUrl).toBeNull();
+    // 担当 Issue のコメントを gh api で外部検証している
+    expect(deps.commands.calls).toContain(
+      "gh api /repos/yonda/cockpit/issues/1/comments",
+    );
+  });
+
+  it("fails when no PR exists and no marker comment is present", async () => {
+    const deps = makeDeps();
+    deps.commands.prUrl = null;
+    deps.commands.issueComments = ["ただの進捗コメント（マーカーなし）"];
+    const job = store.create({
+      repo: "yonda/cockpit",
+      issueNumber: 1,
+      issueTitle: "test issue",
+      branch: "feature/1-test-issue",
+    });
+
+    await runIssueJob(deps, job.id, new AbortController().signal);
+
+    const final = store.get(job.id)!;
+    expect(final.status).toBe("failed");
+    expect(final.error).toMatch(/draft PR/);
+    expect(final.noChanges).toBe(false);
   });
 
   it("fails when the executor reports an error", async () => {

@@ -84,6 +84,12 @@ export type Job = {
   sessionId: string | null;
   pendingInput: PendingInput | null;
   prUrl: string | null;
+  /**
+   * PR を作らず「差分なし」で完了したことを機械判別するためのフラグ。
+   * 担当 Issue に NO_CHANGES_MARKER 付きの検証エビデンスコメントが確認できた
+   * ときに true になる。この場合 prUrl は null のままで done へ遷移する。
+   */
+  noChanges: boolean;
   error: string | null;
   /** 直近のツール実行など、UI に出す 1 行アクティビティ */
   lastActivity: string | null;
