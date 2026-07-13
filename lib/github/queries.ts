@@ -104,5 +104,6 @@ export function buildSearchQuery(
   role: "review-requested" | "author" | "reviewed-by",
   org: string,
 ): string {
-  return `is:open is:pr ${role}:@me archived:false org:${org}`;
+  // org: と user: の併記は OR — org 配下に加えて自分名義のリポジトリも対象にする
+  return `is:open is:pr ${role}:@me archived:false org:${org} user:@me`;
 }

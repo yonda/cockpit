@@ -126,7 +126,8 @@ export type ActivityEvent = {
 };
 
 async function fetchByRole(role: "author" | "reviewed-by"): Promise<GraphQLPr[]> {
-  const q = `is:pr ${role}:@me archived:false org:${env.githubOrg} updated:>=${daysAgoIso(30)}`;
+  // org: と user: の併記は OR — org 配下に加えて自分名義のリポジトリも対象にする
+  const q = `is:pr ${role}:@me archived:false org:${env.githubOrg} user:@me updated:>=${daysAgoIso(30)}`;
   const data = await graphql<SearchResponse>(MY_ACTIVITY_QUERY, {
     variables: { q },
     revalidate: 60,
