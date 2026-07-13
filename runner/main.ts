@@ -4,6 +4,7 @@ import { realPrepareCwd } from "./decompose";
 import { RealCommandRunner } from "./exec";
 import { RealGitHubClient } from "./github";
 import { applyRunnerToken } from "./github-token";
+import { buildHerdrExecutorFromEnv } from "./herdr-boot";
 import { InputBroker } from "./input-broker";
 import { onJobUpdated, type PbiExecutorDeps } from "./pbi-executor";
 import { reconcileOnBoot } from "./pbi-boot";
@@ -33,11 +34,19 @@ function main(): void {
   store.loadAll();
   const broker = new InputBroker();
   const commands = new RealCommandRunner();
+
+  // 実装ジョブの executor。既定は SdkExecutor、COCKPIT_EXECUTOR=herdr のときだけ
+  // HerdrExecutor (herdr ペイン実行) に差し替える (#58 垂直スライスのオプトイン配線)。
+  // 分解ジョブ (lifecycle) は headless の読み取り解析なので SdkExecutor のまま。
+  const implementExecutor = buildHerdrExecutorFromEnv(REPO_DIR) ?? new SdkExecutor();
+  if (implementExecutor.constructor.name === "HerdrExecutor") {
+    console.log("[runner] implement executor: HerdrExecutor (herdr pane)");
+  }
   const scheduler = new Scheduler({
     store,
     broker,
     commands,
-    executor: new SdkExecutor(),
+    executor: implementExecutor,
     repoDir: REPO_DIR,
   });
 

@@ -1,0 +1,31 @@
+{
+  "permissions": {
+    "defaultMode": "acceptEdits",
+    "deny": [
+      "Bash(gh pr merge:*)",
+      "Bash(gh pr ready:*)",
+      "Bash(git push --force:*)",
+      "Bash(git push --force-with-lease:*)",
+      "Bash(rm:*)",
+      "Skill"
+    ]
+  },
+  "sandbox": {
+    "enabled": true,
+    "failIfUnavailable": true,
+    "autoAllowBashIfSandboxed": true,
+    "excludedCommands": ["gh *"],
+    "network": {
+      "allowedDomains": ["registry.npmjs.org", "github.com", "*.github.com"],
+      "allowAllUnixSockets": true
+    },
+    "credentials": {
+      "files": [
+        { "path": "~/.ssh", "mode": "deny" },
+        { "path": "~/.aws", "mode": "deny" },
+        { "path": "~/.config/gh", "mode": "deny" },
+        { "path": "~/.netrc", "mode": "deny" }
+      ]
+    }
+  }
+}
