@@ -31,6 +31,16 @@ afterEach(() => rmSync(dir, { recursive: true, force: true }));
 /** コマンド呼び出しを記録し、シナリオに応じた stdout を返すフェイク */
 class FakeCommands implements CommandRunner {
   calls: string[] = [];
+  /**
+   * calls と並行して各呼び出しの opts (cwd/env) を記録する。CommandRunner.run の
+   * 実シグネチャどおり cwd/env を受け取り、per-repo 配線 (Task 6) を検証できるようにする。
+   */
+  callOpts: Array<{
+    cmd: string;
+    args: string[];
+    cwd: string;
+    env?: Record<string, string>;
+  }> = [];
   /** `gh pr list` が返す URL。null なら空配列を返す */
   prUrl: string | null = "https://github.com/yonda/cockpit/pull/9";
   /** `gh api .../comments` が返すコメント本文の配列 */
@@ -40,9 +50,14 @@ class FakeCommands implements CommandRunner {
   /** show-ref が成功扱いするブランチ (既存ブランチのシミュレート) */
   existingBranches = new Set<string>();
 
-  async run(cmd: string, args: string[], _opts: { cwd: string }) {
+  async run(
+    cmd: string,
+    args: string[],
+    opts: { cwd: string; env?: Record<string, string> },
+  ) {
     const line = [cmd, ...args].join(" ");
     this.calls.push(line);
+    this.callOpts.push({ cmd, args, cwd: opts.cwd, env: opts.env });
     if (cmd === "gh" && args[0] === "api") {
       return {
         stdout: JSON.stringify(this.issueComments.map((body) => ({ body }))),
@@ -452,7 +467,11 @@ describe("runIssueJob", () => {
       maxActiveFetches = 0;
       fetchCount = 0;
 
-      async run(cmd: string, args: string[], opts: { cwd: string }) {
+      async run(
+        cmd: string,
+        args: string[],
+        opts: { cwd: string; env?: Record<string, string> },
+      ) {
         if (cmd === "git" && args[0] === "fetch") {
           this.fetchCount++;
           this.activeFetches++;
@@ -586,5 +605,23 @@ describe("runIssueJob", () => {
           c.includes("origin/develop"),
       ),
     ).toBe(true);
+
+    // Task 6 の中心的な配線: git/gh コマンドは registry から解決した
+    // config.path を cwd に使う (デフォルト設定の /tmp/cockpit ではないこと)。
+    const gitAndGhCalls = deps.commands.callOpts.filter(
+      (c) => c.cmd === "git" || c.cmd === "gh",
+    );
+    expect(gitAndGhCalls.length).toBeGreaterThan(0);
+    for (const call of gitAndGhCalls) {
+      expect(call.cwd).toBe("/wt/x");
+    }
+
+    // gh 呼び出しには resolveToken が返したトークンが env.GH_TOKEN として
+    // 渡ること (実トークンではなくフェイクのプレースホルダで検証)。
+    const ghCalls = deps.commands.callOpts.filter((c) => c.cmd === "gh");
+    expect(ghCalls.length).toBeGreaterThan(0);
+    for (const call of ghCalls) {
+      expect(call.env?.GH_TOKEN).toBe("test-token");
+    }
   });
 });
