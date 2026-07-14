@@ -74,8 +74,10 @@ export class RealHerdrClient implements HerdrClient {
       ? `GH_TOKEN=${shellQuote(opts.githubToken)} `
       : "";
     // 実行環境統一 (#85): --settings は渡さない。人間と同じユーザー settings
-    // (統一プロファイル) を継承する。不変条件は起動時に profile-check が検証済み。
-    const launch = `cd ${shellQuote(opts.cwd)} && ${tokenPrefix}claude${resumeFlag}`;
+    // (統一プロファイル) を継承する。不変条件は起動時+spawn 毎に profile-check が検証済み。
+    // モードだけ二層 (#100): ユーザー既定は auto (対話向け) だが、無人ジョブは
+    // classifier の質問に答える人間がいないため、決定的な acceptEdits を明示する。
+    const launch = `cd ${shellQuote(opts.cwd)} && ${tokenPrefix}claude --permission-mode acceptEdits${resumeFlag}`;
     try {
       await herdr(["pane", "run", paneId, launch]);
     } catch (err) {
