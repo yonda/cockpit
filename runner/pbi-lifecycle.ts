@@ -163,6 +163,14 @@ export async function approveDecomposition(
       `cannot approve pbi in status ${pbi.status} (${pbiId})`,
     );
   }
+  // 承認をまず同期的に確定する（awaiting_approval -> executing）。issue body 更新
+  // （await を挟む）より前に遷移することで、並行 approve の TOCTOU を閉じる。
+  // 遷移を末尾に置くと、2 つの approve が共に「まだ awaiting_approval」を観測して
+  // どちらも本体に進み、2 個目が executing -> executing の不正遷移で throw →
+  // fire-and-forget チェーンの .catch(failPbiSafely) が実行中の PBI を failed に
+  // 落としてしまう。二重承認の 2 回目は pbi-server の pbi.approve ハンドラの
+  // 同期ガードで弾く（この関数に到達する前に error を返す）。
+  deps.store.transition(pbiId, "executing");
   for (const t of pbi.subTasks) {
     if (t.issueNumber != null) {
       await deps.github.updateIssueBody(
@@ -177,7 +185,6 @@ export async function approveDecomposition(
   )) {
     deps.store.clearEscalation(pbiId, e.id);
   }
-  deps.store.transition(pbiId, "executing");
 }
 
 export async function rejectDecomposition(
