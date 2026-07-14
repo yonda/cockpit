@@ -77,7 +77,13 @@ describe("checkUnifiedProfile", () => {
     expect(checkUnifiedProfile(s).join()).toContain("bypassPermissions");
   });
 
-  it("acceptEdits 以外の defaultMode は完走性違反", () => {
+  it("auto は許容する (対話の既定。無人ジョブは spawn フラグで acceptEdits になる)", () => {
+    const s = validSettings();
+    s.permissions.defaultMode = "auto";
+    expect(checkUnifiedProfile(s)).toEqual([]);
+  });
+
+  it("auto / acceptEdits 以外の defaultMode は違反", () => {
     const s = validSettings();
     s.permissions.defaultMode = "default";
     expect(checkUnifiedProfile(s).join()).toContain("acceptEdits");

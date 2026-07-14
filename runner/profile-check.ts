@@ -85,14 +85,17 @@ export function checkUnifiedProfile(settings: unknown): string[] {
 
   // bypassPermissions は deny こそ強制されるが Seatbelt の封じ込め
   // (allowedDomains 等) を無効化することを実測済み。無人実行では不可。
+  // モードは二層 (#100): 対話の既定は auto (classifier) でよい。無人ジョブは
+  // herdr-real が spawn 時に --permission-mode acceptEdits を明示するため、
+  // ユーザー既定が auto でも無人完走性は損なわれない。
   const mode = s.permissions?.defaultMode;
   if (mode === "bypassPermissions") {
     violations.push(
       "permissions.defaultMode が bypassPermissions (sandbox 封じ込めが無効化される)",
     );
-  } else if (mode !== "acceptEdits") {
+  } else if (mode !== "acceptEdits" && mode !== "auto") {
     violations.push(
-      `permissions.defaultMode が acceptEdits ではありません (現在: ${String(mode)} — 無人ジョブが編集承認で無音停止する)`,
+      `permissions.defaultMode が auto でも acceptEdits でもありません (現在: ${String(mode)})`,
     );
   }
 

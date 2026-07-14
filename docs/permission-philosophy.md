@@ -242,8 +242,12 @@ HerdrExecutor の初期実装は runner 専用 settings
 
 ### 統一プロファイルの構成 (~/.claude/settings.json)
 
-- `defaultMode: acceptEdits` + `sandbox.enabled` + `autoAllowBashIfSandboxed`
-  (層 1: sandbox に収まる作業は無承認)
+- `defaultMode: auto` + `sandbox.enabled` + `autoAllowBashIfSandboxed`
+  (層 1: sandbox に収まる作業は無承認)。**モードだけ二層 (#100)**: 対話の既定は
+  auto (classifier が文脈判断 — 運用系コマンドや cwd 外操作で人間が答えられる
+  前提の快適さ)。無人ジョブは classifier の質問に答える人間がいないため、
+  runner が spawn 時に `--permission-mode acceptEdits` を明示して決定的に走らせる。
+  settings 注入の復活ではない (sandbox / allow / deny は共通プロファイルを継承)
 - allow: 提出系 (`git push` / `gh pr create` / gh 読み取り) + 検証系
   (`pnpm` / `npx` / `node`) + 複合コマンドの従属セグメント頻出ユーティリティ
   (実測 4 により封じ込め非破壊)
