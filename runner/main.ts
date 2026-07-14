@@ -85,7 +85,13 @@ function main(): void {
     });
   });
 
-  startRunnerServer(RUNNER_SOCKET_PATH, { store, scheduler, broker, pbi });
+  startRunnerServer(RUNNER_SOCKET_PATH, {
+    store,
+    scheduler,
+    broker,
+    pbi,
+    repos: { registry, github },
+  });
   scheduler.resumeOnBoot();
   reconcileOnBoot({ pbiStore, exec });
   startPoller({ pbiStore, github, exec }, PBI_POLL_INTERVAL_MS);

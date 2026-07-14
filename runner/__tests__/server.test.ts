@@ -41,19 +41,29 @@ beforeEach(() => {
   );
   const pbiStore = new PbiStore(join(dir, "pbis"));
   pbiStore.loadAll();
+  const github = {
+    fetchIssue: async () => ({ title: "", body: "" }),
+    createSubIssue: async () => ({ number: 1, url: "" }),
+    updateIssueBody: async () => {},
+    closeIssue: async () => {},
+    prStateForBranch: async () => ({ kind: "none" as const }),
+    searchAssignedOpenIssues: async () => [
+      {
+        repo: "acme/app",
+        issueNumber: 1,
+        title: "assigned",
+        url: "https://github.com/acme/app/issues/1",
+        createdAt: "2026-07-14T00:00:00Z",
+        labels: [],
+      },
+    ],
+  };
   pbi = {
     pbiStore,
     lifecycle: {
       store: pbiStore,
       executor: { run: async () => ({ ok: true as const }) },
-      github: {
-        fetchIssue: async () => ({ title: "", body: "" }),
-        createSubIssue: async () => ({ number: 1, url: "" }),
-        updateIssueBody: async () => {},
-        closeIssue: async () => {},
-        prStateForBranch: async () => ({ kind: "none" as const }),
-        searchAssignedOpenIssues: async () => [],
-      },
+      github,
       prepareCwd: async () => ({
         cwd: dir,
         githubToken: "tok-acme",
@@ -62,7 +72,18 @@ beforeEach(() => {
     },
     exec: { pbiStore, jobStore: store, scheduler },
   };
-  server = startRunnerServer(socketPath, { store, scheduler, broker, pbi });
+  server = startRunnerServer(socketPath, {
+    store,
+    scheduler,
+    broker,
+    pbi,
+    repos: {
+      registry: new RepoRegistry([
+        { repo: "acme/app", path: dir, baseBranch: "main", tokenOwner: "acme" },
+      ]),
+      github,
+    },
+  });
 });
 
 afterEach(() => {
@@ -177,6 +198,18 @@ describe("runner socket protocol", () => {
       process.off("unhandledRejection", onUnhandledRejection);
     }
     expect(unhandled).toBeUndefined();
+  });
+
+  it("dispatches repos.assignedIssues over the socket (not unknown method)", async () => {
+    const { callRunner } = await client();
+    const result = await callRunner<{
+      issues: Array<{ repo: string; issueNumber: number }>;
+      errors: unknown[];
+    }>("repos.assignedIssues", {});
+
+    expect(result.issues).toHaveLength(1);
+    expect(result.issues[0]).toMatchObject({ repo: "acme/app", issueNumber: 1 });
+    expect(result.errors).toEqual([]);
   });
 
   it("rejects job.respond with an invalid response shape", async () => {

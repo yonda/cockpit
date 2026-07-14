@@ -8,8 +8,10 @@ import {
   type RunnerResponse,
 } from "../lib/jobs/types";
 import type { PbiJob, PbiRunnerRequest } from "../lib/pbi/types";
+import type { ReposRunnerRequest } from "../lib/repos/types";
 import type { InputBroker } from "./input-broker";
 import { handlePbiRequest, type PbiServerDeps } from "./pbi-server";
+import { handleReposRequest, type ReposServerDeps } from "./repos-server";
 import type { Scheduler } from "./scheduler";
 import type { JobStore } from "./store";
 import { buildBranchName } from "./workflow";
@@ -19,6 +21,7 @@ type Deps = {
   scheduler: Scheduler;
   broker: InputBroker;
   pbi: PbiServerDeps;
+  repos: ReposServerDeps;
 };
 
 const ACTIVE = new Set(["queued", "running", "waiting_input"]);
@@ -67,11 +70,26 @@ function handleLine(
   subscribers: Set<Socket>,
   deps: Deps,
 ): void {
-  let request: RunnerRequest | PbiRunnerRequest;
+  let request: RunnerRequest | PbiRunnerRequest | ReposRunnerRequest;
   try {
-    request = JSON.parse(line) as RunnerRequest | PbiRunnerRequest;
+    request = JSON.parse(line) as
+      | RunnerRequest
+      | PbiRunnerRequest
+      | ReposRunnerRequest;
   } catch {
     respond(socket, { id: "?", error: { message: "invalid json" } });
+    return;
+  }
+
+  if (request.method.startsWith("repos.")) {
+    void handleReposRequest(request as ReposRunnerRequest, deps.repos).then(
+      (r) => respond(socket, { id: request.id, ...r }),
+      (err) =>
+        respond(socket, {
+          id: request.id,
+          error: { message: err instanceof Error ? err.message : String(err) },
+        }),
+    );
     return;
   }
 
