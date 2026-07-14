@@ -191,6 +191,124 @@ describe("handlePbiRequest", () => {
     expect(unhandled).toBeUndefined();
   });
 
+  // --- pbi.fire サーバー側冪等ガード（同一 repo#issue の active な PBI があれば拒否） ---
+  //
+  // UI をすり抜けた二重リクエストへの最終防衛（defense in depth）を回帰から守る。
+  // ガード本体は pbi-server.ts の pbi.fire ケースにあり、
+  //   !["completed", "failed", "cancelled"].includes(p.status)
+  // つまり decomposing / awaiting_approval / executing の PBI があれば拒否する。
+
+  // 指定 status の PBI を同期的に用意する（分解の fire-and-forget を経由しない）。
+  const seedPbi = (
+    repo: string,
+    issueNumber: number,
+    status: "decomposing" | "awaiting_approval" | "executing" | "completed" | "failed" | "cancelled",
+  ) => {
+    const pbi = deps.pbiStore.create({ repo, issueNumber, title: "seed" });
+    // create 直後は decomposing。terminal / executing へは許可された経路で遷移する。
+    const path: Record<typeof status, ("awaiting_approval" | "executing" | "completed" | "failed" | "cancelled")[]> = {
+      decomposing: [],
+      awaiting_approval: ["awaiting_approval"],
+      executing: ["awaiting_approval", "executing"],
+      completed: ["awaiting_approval", "executing", "completed"],
+      failed: ["failed"],
+      cancelled: ["cancelled"],
+    };
+    for (const to of path[status]) deps.pbiStore.transition(pbi.id, to);
+    return pbi;
+  };
+
+  const fire = (repo: string, issueNumber: number) =>
+    handlePbiRequest(
+      { id: "f", method: "pbi.fire", params: { repo, issueNumber, title: "PBI" } },
+      deps,
+    );
+
+  for (const status of ["decomposing", "awaiting_approval", "executing"] as const) {
+    it(`pbi.fire rejects when an active (${status}) PBI already exists for the same repo#issue and creates no second PBI`, async () => {
+      seedPbi("yonda/cockpit", 42, status);
+      const before = deps.pbiStore.list().length;
+
+      const res = await fire("yonda/cockpit", 42);
+
+      expect(res.error?.message).toMatch(/既に進行中/);
+      expect(res.result).toBeUndefined();
+      // 2 個目の PBI は作られない
+      expect(deps.pbiStore.list().length).toBe(before);
+    });
+  }
+
+  for (const status of ["completed", "failed", "cancelled"] as const) {
+    it(`pbi.fire re-fires when only a terminal (${status}) PBI exists for the same repo#issue`, async () => {
+      const seeded = seedPbi("yonda/cockpit", 42, status);
+      const before = deps.pbiStore.list().length;
+
+      const res = await fire("yonda/cockpit", 42);
+
+      const created = (res.result as { pbi: { id: string } }).pbi;
+      expect(created.id).toMatch(/^pbi-/);
+      expect(created.id).not.toBe(seeded.id);
+      // 新しい PBI が 1 件増える
+      expect(deps.pbiStore.list().length).toBe(before + 1);
+
+      await flush(); // fire-and-forget の分解完了を待って後片付けを安定させる
+    });
+  }
+
+  it("pbi.fire scopes the duplicate guard to the same repo AND issueNumber", async () => {
+    seedPbi("yonda/cockpit", 42, "executing");
+    const before = deps.pbiStore.list().length;
+
+    // 同 issueNumber・別 repo は別物として発射できる
+    const otherRepo = await fire("yonda/other", 42);
+    expect((otherRepo.result as { pbi: { id: string } }).pbi.id).toMatch(/^pbi-/);
+    // 同 repo・別 issueNumber も別物として発射できる
+    const otherIssue = await fire("yonda/cockpit", 43);
+    expect((otherIssue.result as { pbi: { id: string } }).pbi.id).toMatch(/^pbi-/);
+
+    expect(deps.pbiStore.list().length).toBe(before + 2);
+    await flush();
+  });
+
+  // --- pbi.approve 連打（二重承認）ガード ---
+  //
+  // UI をすり抜けた二重 approve への最終防衛。ガードが無いと、fire-and-forget の
+  // approveDecomposition が 2 本走り、2 本目が executing -> executing の不正遷移で
+  // throw → .catch(failPbiSafely) が実行中の PBI を failed に落としてしまう。
+  it("pbi.approve rejects a second approve (連打) and keeps the PBI executing instead of failing it", async () => {
+    const fired = await fire("yonda/cockpit", 77);
+    const pbiId = (fired.result as { pbi: { id: string } }).pbi.id;
+    await flush();
+    expect(deps.pbiStore.get(pbiId)!.status).toBe("awaiting_approval");
+
+    const first = await handlePbiRequest(
+      { id: "a1", method: "pbi.approve", params: { pbiId } },
+      deps,
+    );
+    // 2 回目は 1 回目の fire-and-forget チェーン完了前に届く連打を模す
+    const second = await handlePbiRequest(
+      { id: "a2", method: "pbi.approve", params: { pbiId } },
+      deps,
+    );
+    await flush();
+    await flush();
+    await flush();
+
+    // 1 回目は受理、2 回目は同期ガードで clean error（PBI を failed に落とさない）
+    expect(first.error).toBeUndefined();
+    expect(second.error?.message).toMatch(/承認できる状態ではありません/);
+    // PBI は二重承認で failed に落ちず、正しく executing のまま進む
+    expect(deps.pbiStore.get(pbiId)!.status).toBe("executing");
+  });
+
+  it("pbi.approve returns a clean error for an unknown pbiId without touching state", async () => {
+    const res = await handlePbiRequest(
+      { id: "a", method: "pbi.approve", params: { pbiId: "pbi-does-not-exist" } },
+      deps,
+    );
+    expect(res.error?.message).toMatch(/承認できる状態ではありません \(unknown\)/);
+  });
+
   const failedSubTask = (over: Partial<SubTaskRecord> = {}): SubTaskRecord => ({
     key: "t1",
     title: "types",

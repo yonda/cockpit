@@ -70,11 +70,25 @@ export async function handlePbiRequest(
       return { result: { pbi } };
     }
 
-    case "pbi.approve":
+    case "pbi.approve": {
+      // 冪等ガード（発射系 RPC の二重リクエスト最終防衛）: awaiting_approval 以外への
+      // approve は fire-and-forget チェーンに載せない。載せると approveDecomposition の
+      // guard 例外が .catch(failPbiSafely) に拾われ、既に executing の PBI を failed へ
+      // 落としてしまう（二重承認事故）。approveDecomposition は executing への遷移を
+      // 同期的に先に確定するため、連打の 2 回目はここで executing を観測して弾かれる。
+      const pbi = deps.pbiStore.get(request.params.pbiId);
+      if (!pbi || pbi.status !== "awaiting_approval") {
+        return {
+          error: {
+            message: `PBI は承認できる状態ではありません (${pbi?.status ?? "unknown"})`,
+          },
+        };
+      }
       void approveDecomposition(deps.lifecycle, request.params.pbiId)
         .then(() => dispatchReady(deps.exec, request.params.pbiId))
         .catch((err) => failPbiSafely(deps, request.params.pbiId, err));
       return { result: {} };
+    }
 
     case "pbi.revise":
       void reviseDecomposition(
