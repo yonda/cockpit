@@ -7,6 +7,15 @@ export type PrState =
   | { kind: "merged"; url: string }
   | { kind: "closed"; url: string };
 
+export type AssignedIssue = {
+  repo: string;
+  issueNumber: number;
+  title: string;
+  url: string;
+  createdAt: string;
+  labels: string[];
+};
+
 export interface GitHubClient {
   fetchIssue(repo: string, number: number): Promise<{ title: string; body: string }>;
   createSubIssue(
@@ -17,6 +26,12 @@ export interface GitHubClient {
   updateIssueBody(repo: string, number: number, body: string): Promise<void>;
   closeIssue(repo: string, number: number): Promise<void>;
   prStateForBranch(repo: string, branch: string): Promise<PrState>;
+  /**
+   * owner のアイデンティティ (owner 別 fine-grained token) で
+   * assignee:@me is:open is:issue を検索する検索プリミティブ。
+   * ラベル絞り込みは行わない。
+   */
+  searchAssignedOpenIssues(owner: string): Promise<AssignedIssue[]>;
 }
 
 export function subIssueBody(task: SubTask, proposed: boolean): string {
@@ -43,7 +58,11 @@ export class RealGitHubClient implements GitHubClient {
   ) {}
 
   private gh(repo: string, args: string[]) {
-    const owner = repo.split("/")[0];
+    return this.ghAsOwner(repo.split("/")[0], args);
+  }
+
+  /** owner のトークンを解決して gh を実行する (resolveToken の throw はそのまま伝播)。 */
+  private ghAsOwner(owner: string, args: string[]) {
     return this.commands.run("gh", args, {
       cwd: process.cwd(),
       env: { GH_TOKEN: this.resolveToken(owner) },
@@ -106,6 +125,37 @@ export class RealGitHubClient implements GitHubClient {
 
   async closeIssue(repo: string, number: number) {
     await this.gh(repo, ["issue", "close", String(number), "--repo", repo]);
+  }
+
+  async searchAssignedOpenIssues(owner: string): Promise<AssignedIssue[]> {
+    const { stdout } = await this.ghAsOwner(owner, [
+      "search",
+      "issues",
+      "--assignee",
+      "@me",
+      "--state",
+      "open",
+      "--owner",
+      owner,
+      "--json",
+      "number,title,url,createdAt,labels,repository",
+    ]);
+    const rows = JSON.parse(stdout) as Array<{
+      number: number;
+      title: string;
+      url: string;
+      createdAt: string;
+      labels?: Array<{ name: string }>;
+      repository?: { nameWithOwner: string };
+    }>;
+    return rows.map((row) => ({
+      repo: row.repository?.nameWithOwner ?? "",
+      issueNumber: row.number,
+      title: row.title,
+      url: row.url,
+      createdAt: row.createdAt,
+      labels: (row.labels ?? []).map((label) => label.name),
+    }));
   }
 
   async prStateForBranch(repo: string, branch: string): Promise<PrState> {

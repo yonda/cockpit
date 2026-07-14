@@ -51,6 +51,9 @@ class FakeGitHub implements GitHubClient {
     if (this.throwFor.has(branch)) throw new Error("gh api down");
     return this.prStates[branch] ?? { kind: "none" };
   }
+  async searchAssignedOpenIssues() {
+    return [];
+  }
 }
 
 const executing = () => {
