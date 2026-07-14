@@ -86,7 +86,15 @@ function main(): void {
     repos: { registry, github },
   });
   scheduler.resumeOnBoot();
-  reconcileOnBoot({ pbiStore, exec });
+  // async 化 (#97): 起動をブロックしない fire-and-forget。失敗してもデーモンは
+  // 落とさずログに残す（次のポーリング周期で dispatchReady が再試行される）。
+  void reconcileOnBoot({ pbiStore, exec }).catch((err) => {
+    console.error(
+      `[runner] reconcileOnBoot failed: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    );
+  });
   startPoller({ pbiStore, github, exec }, PBI_POLL_INTERVAL_MS);
 
   console.log(

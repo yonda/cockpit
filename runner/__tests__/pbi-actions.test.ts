@@ -9,9 +9,11 @@ import { PbiStore } from "../pbi-store";
 import { RepoRegistry } from "../repo-registry";
 import { Scheduler } from "../scheduler";
 import { InputBroker } from "../input-broker";
+import type { GitHubClient, PrState } from "../github";
 import { onJobUpdated, type PbiExecutorDeps } from "../pbi-executor";
 import {
   cancelPbi,
+  markTaskDone,
   pausePbi,
   resumePbi,
   retryTask,
@@ -72,7 +74,7 @@ afterEach(() => {
 });
 
 describe("retryTask", () => {
-  it("returns a failed task to pending, clears the escalation, and re-dispatches", () => {
+  it("returns a failed task to pending, clears the escalation, and re-dispatches", async () => {
     const pbiId = executing();
     pbiStore.setSubTasks(pbiId, [rec({ key: "t1", state: "failed" })]);
     pbiStore.addEscalation(pbiId, {
@@ -81,17 +83,46 @@ describe("retryTask", () => {
       detail: "boom",
     });
 
-    retryTask(deps, pbiId, "t1");
+    await retryTask(deps, pbiId, "t1");
 
     const after = pbiStore.get(pbiId)!;
     expect(after.subTasks[0].state).toBe("running"); // dispatchReady が発射
     expect(after.escalations).toHaveLength(0);
     expect(jobStore.list()).toHaveLength(1);
   });
+
+  it("does not refire while the previous job is still alive (failed was a misjudgement)", async () => {
+    // 前ジョブが実際にはまだ稼働中なのに sub-task が failed 判定された状況からの
+    // retry。jobId を保持したまま pending に戻り、発射前ガードが二重発射を防ぐ。
+    const pbiId = executing();
+    const prev = jobStore.create({
+      repo: "r",
+      issueNumber: 100,
+      issueTitle: "t",
+      branch: "feature/100-t",
+    });
+    jobStore.transition(prev.id, "running");
+    pbiStore.setSubTasks(pbiId, [
+      rec({ key: "t1", state: "failed", jobId: prev.id }),
+    ]);
+    pbiStore.addEscalation(pbiId, {
+      kind: "task_failed",
+      subTaskKey: "t1",
+      detail: "boom",
+    });
+
+    await retryTask(deps, pbiId, "t1");
+
+    const after = pbiStore.get(pbiId)!;
+    expect(after.subTasks[0].state).toBe("pending"); // 発射されず待機
+    expect(after.subTasks[0].jobId).toBe(prev.id); // 前ジョブへの参照を保持
+    expect(after.escalations).toHaveLength(0);
+    expect(jobStore.list()).toHaveLength(1); // 新規ジョブは作られない
+  });
 });
 
 describe("skipTask", () => {
-  it("marks the task skipped and completes the PBI if it was the last", () => {
+  it("marks the task skipped and completes the PBI if it was the last", async () => {
     const pbiId = executing();
     pbiStore.setSubTasks(pbiId, [rec({ key: "t1", state: "failed" })]);
     pbiStore.addEscalation(pbiId, {
@@ -100,7 +131,7 @@ describe("skipTask", () => {
       detail: "boom",
     });
 
-    skipTask(deps, pbiId, "t1");
+    await skipTask(deps, pbiId, "t1");
 
     const after = pbiStore.get(pbiId)!;
     expect(after.subTasks[0].state).toBe("skipped");
@@ -109,15 +140,141 @@ describe("skipTask", () => {
   });
 });
 
+describe("markTaskDone", () => {
+  class FakeGitHub implements GitHubClient {
+    prState: PrState = { kind: "none" };
+    prLookups: string[] = [];
+    closedIssues: number[] = [];
+    closeIssueError: Error | null = null;
+    async fetchIssue() {
+      return { title: "t", body: "" };
+    }
+    async createSubIssue() {
+      return { number: 1, url: "u" };
+    }
+    async updateIssueBody() {}
+    async closeIssue(_repo: string, number: number) {
+      if (this.closeIssueError) throw this.closeIssueError;
+      this.closedIssues.push(number);
+    }
+    async prStateForBranch(_repo: string, branch: string): Promise<PrState> {
+      this.prLookups.push(branch);
+      return this.prState;
+    }
+    async searchAssignedOpenIssues() {
+      return [];
+    }
+  }
+
+  let github: FakeGitHub;
+  beforeEach(() => {
+    github = new FakeGitHub();
+    deps = { ...deps, github };
+  });
+
+  it("moves a failed task with a merged PR to merged (prUrl recorded), clears escalations, closes the sub-issue, and completes the PBI", async () => {
+    const pbiId = executing();
+    pbiStore.setSubTasks(pbiId, [rec({ key: "t1", state: "failed" })]);
+    pbiStore.addEscalation(pbiId, {
+      kind: "task_failed",
+      subTaskKey: "t1",
+      detail: "boom",
+    });
+    github.prState = { kind: "merged", url: "https://pr/1" };
+
+    await markTaskDone(deps, pbiId, "t1");
+
+    const after = pbiStore.get(pbiId)!;
+    expect(after.subTasks[0].state).toBe("merged");
+    expect(after.subTasks[0].prUrl).toBe("https://pr/1");
+    expect(after.escalations).toHaveLength(0);
+    expect(github.prLookups).toEqual(["feature/100-t"]);
+    expect(github.closedIssues).toEqual([100]);
+    expect(after.status).toBe("completed");
+  });
+
+  it("moves a failed task without a merged PR to done_no_pr and completes the PBI", async () => {
+    const pbiId = executing();
+    pbiStore.setSubTasks(pbiId, [rec({ key: "t1", state: "failed" })]);
+    github.prState = { kind: "closed", url: "https://pr/1" };
+
+    await markTaskDone(deps, pbiId, "t1");
+
+    const after = pbiStore.get(pbiId)!;
+    expect(after.subTasks[0].state).toBe("done_no_pr");
+    expect(after.subTasks[0].prUrl).toBeNull();
+    expect(after.status).toBe("completed");
+  });
+
+  it("falls back to done_no_pr when the github client is absent", async () => {
+    const pbiId = executing();
+    pbiStore.setSubTasks(pbiId, [rec({ key: "t1", state: "failed" })]);
+
+    await markTaskDone({ ...deps, github: undefined }, pbiId, "t1");
+
+    expect(pbiStore.get(pbiId)!.subTasks[0].state).toBe("done_no_pr");
+  });
+
+  it("dispatches dependent tasks after marking done (skipTask 同系の次発射)", async () => {
+    const pbiId = executing();
+    pbiStore.setSubTasks(pbiId, [
+      rec({ key: "t1", state: "failed" }),
+      rec({ key: "t2", issueNumber: 101, branch: null, dependsOn: ["t1"] }),
+    ]);
+
+    await markTaskDone(deps, pbiId, "t1");
+
+    const after = pbiStore.get(pbiId)!;
+    expect(after.status).toBe("executing");
+    expect(after.subTasks[1].state).toBe("running");
+    expect(jobStore.list()).toHaveLength(1);
+  });
+
+  it("rejects non-failed sub-tasks before touching GitHub", async () => {
+    const pbiId = executing();
+    pbiStore.setSubTasks(pbiId, [rec({ key: "t1", state: "running" })]);
+
+    await expect(markTaskDone(deps, pbiId, "t1")).rejects.toThrow(
+      /invalid sub-task transition: running -> done_no_pr/,
+    );
+    expect(github.prLookups).toHaveLength(0);
+    expect(pbiStore.get(pbiId)!.subTasks[0].state).toBe("running");
+  });
+
+  it("rejects unknown pbi / sub-task keys", async () => {
+    const pbiId = executing();
+    pbiStore.setSubTasks(pbiId, [rec({ key: "t1", state: "failed" })]);
+
+    await expect(markTaskDone(deps, "pbi-nope", "t1")).rejects.toThrow(
+      /unknown pbi/,
+    );
+    await expect(markTaskDone(deps, pbiId, "t9")).rejects.toThrow(
+      /unknown sub-task/,
+    );
+  });
+
+  it("does not block completion when closeIssue fails (best-effort)", async () => {
+    const pbiId = executing();
+    pbiStore.setSubTasks(pbiId, [rec({ key: "t1", state: "failed" })]);
+    github.closeIssueError = new Error("gh down");
+
+    await markTaskDone(deps, pbiId, "t1");
+
+    const after = pbiStore.get(pbiId)!;
+    expect(after.subTasks[0].state).toBe("done_no_pr");
+    expect(after.status).toBe("completed");
+  });
+});
+
 describe("pause / resume", () => {
-  it("pause stops new dispatch; resume re-dispatches ready tasks", () => {
+  it("pause stops new dispatch; resume re-dispatches ready tasks", async () => {
     const pbiId = executing();
     pbiStore.setSubTasks(pbiId, [rec({ key: "t1" })]);
 
     pausePbi(pbiStore, pbiId);
     expect(pbiStore.get(pbiId)!.paused).toBe(true);
 
-    resumePbi(deps, pbiId);
+    await resumePbi(deps, pbiId);
     expect(pbiStore.get(pbiId)!.paused).toBe(false);
     expect(pbiStore.get(pbiId)!.subTasks[0].state).toBe("running");
   });

@@ -121,7 +121,9 @@ export class RealHerdrClient implements HerdrClient {
     );
   }
 
-  private async agentStatus(paneId: string): Promise<string> {
+  // startAgent の submit リトライ判定に加えて、HerdrExecutor が idle timeout 確定
+  // 直前の done 再確認に使うため公開している (HerdrClient.agentStatus)。
+  async agentStatus(paneId: string): Promise<string> {
     const out = await herdr(["pane", "list"]);
     const panes = JSON.parse(out)?.result?.panes;
     const pane = Array.isArray(panes)

@@ -63,14 +63,14 @@ afterEach(() => {
 });
 
 describe("reconcileOnBoot", () => {
-  it("resets running sub-tasks whose job no longer exists back to pending, then re-dispatches", () => {
+  it("resets running sub-tasks whose job no longer exists back to pending, then re-dispatches", async () => {
     const pbi = pbiStore.create({ repo: "r", issueNumber: 42, title: "P" });
     pbiStore.transition(pbi.id, "awaiting_approval");
     pbiStore.transition(pbi.id, "executing");
     // jobId="dead-job" は jobStore に存在しない（前回プロセスと共に消えた想定）
     pbiStore.setSubTasks(pbi.id, [rec({ key: "t1" })]);
 
-    reconcileOnBoot({ pbiStore, exec });
+    await reconcileOnBoot({ pbiStore, exec });
 
     const t1 = pbiStore.get(pbi.id)!.subTasks[0];
     // 再発射され running（新しい jobId が振られている）
@@ -79,7 +79,7 @@ describe("reconcileOnBoot", () => {
     expect(jobStore.list()).toHaveLength(1);
   });
 
-  it("leaves in_review sub-tasks untouched (merge resolved by poller)", () => {
+  it("leaves in_review sub-tasks untouched (merge resolved by poller)", async () => {
     const pbi = pbiStore.create({ repo: "r", issueNumber: 42, title: "P" });
     pbiStore.transition(pbi.id, "awaiting_approval");
     pbiStore.transition(pbi.id, "executing");
@@ -87,11 +87,11 @@ describe("reconcileOnBoot", () => {
       rec({ key: "t1", state: "in_review", jobId: "old", prUrl: "u" }),
     ]);
 
-    reconcileOnBoot({ pbiStore, exec });
+    await reconcileOnBoot({ pbiStore, exec });
     expect(pbiStore.get(pbi.id)!.subTasks[0].state).toBe("in_review");
   });
 
-  it("advances a running sub-task to in_review (with prUrl) when its job already finished done, without re-dispatching", () => {
+  it("advances a running sub-task to in_review (with prUrl) when its job already finished done, without re-dispatching", async () => {
     const pbi = pbiStore.create({ repo: "r", issueNumber: 42, title: "P" });
     pbiStore.transition(pbi.id, "awaiting_approval");
     pbiStore.transition(pbi.id, "executing");
@@ -107,7 +107,7 @@ describe("reconcileOnBoot", () => {
     });
     pbiStore.setSubTasks(pbi.id, [rec({ key: "t1", jobId: job.id })]);
 
-    reconcileOnBoot({ pbiStore, exec });
+    await reconcileOnBoot({ pbiStore, exec });
 
     const t1 = pbiStore.get(pbi.id)!.subTasks[0];
     expect(t1.state).toBe("in_review");
@@ -116,7 +116,7 @@ describe("reconcileOnBoot", () => {
     expect(jobStore.list()).toHaveLength(1);
   });
 
-  it("marks a running sub-task failed with a task_failed escalation when its job already finished failed, without auto-retrying", () => {
+  it("marks a running sub-task failed with a task_failed escalation when its job already finished failed, without auto-retrying", async () => {
     const pbi = pbiStore.create({ repo: "r", issueNumber: 42, title: "P" });
     pbiStore.transition(pbi.id, "awaiting_approval");
     pbiStore.transition(pbi.id, "executing");
@@ -130,7 +130,7 @@ describe("reconcileOnBoot", () => {
     jobStore.transition(job.id, "failed", { error: "boom" });
     pbiStore.setSubTasks(pbi.id, [rec({ key: "t1", jobId: job.id })]);
 
-    reconcileOnBoot({ pbiStore, exec });
+    await reconcileOnBoot({ pbiStore, exec });
 
     const after = pbiStore.get(pbi.id)!;
     expect(after.subTasks[0].state).toBe("failed");

@@ -41,6 +41,7 @@ type Fakes = {
     createCalls: Array<{ workspaceId: string; label: string }>;
     startCalls: Array<Parameters<HerdrClient["startAgent"]>[1]>;
     closed: string[];
+    statusCalls: string[];
   };
   transcript: TranscriptReader;
 };
@@ -49,10 +50,12 @@ function makeFakes(opts: {
   session?: { path: string; sessionId: string } | null;
   activitiesPerRead?: string[][];
   done?: boolean;
+  agentStatus?: string;
 }): Fakes {
   const createCalls: Fakes["herdr"]["createCalls"] = [];
   const startCalls: Fakes["herdr"]["startCalls"] = [];
   const closed: string[] = [];
+  const statusCalls: string[] = [];
   const reads = opts.activitiesPerRead ?? [["tool: Bash"]];
   let readIdx = 0;
   let offset = 0;
@@ -61,6 +64,7 @@ function makeFakes(opts: {
     createCalls,
     startCalls,
     closed,
+    statusCalls,
     createPane: async (o) => {
       createCalls.push(o);
       return "w1:p2";
@@ -68,7 +72,14 @@ function makeFakes(opts: {
     startAgent: async (_pane, o) => {
       startCalls.push(o);
     },
-    waitDone: async () => opts.done ?? true,
+    // done:false は「done へ達しない」を表す。false を即返すと張り直しループが
+    // 空回りするため、未解決のまま留めて idle timeout 側の判定を検証させる。
+    waitDone: async () =>
+      opts.done === false ? new Promise<boolean>(() => {}) : true,
+    agentStatus: async (p) => {
+      statusCalls.push(p);
+      return opts.agentStatus ?? "running";
+    },
     closePane: async (p) => {
       closed.push(p);
     },
@@ -99,7 +110,7 @@ function makeDeps(fakes: Fakes, over: Partial<HerdrExecutorDeps> = {}) {
     workspaceId: "w1",
     pollIntervalMs: 1,
     sessionTimeoutMs: 100,
-    doneTimeoutMs: 100,
+    idleTimeoutMs: 100,
     ...over,
   } as HerdrExecutorDeps & { trustWorktree: ReturnType<typeof vi.fn> };
 }
@@ -197,14 +208,77 @@ describe("HerdrExecutor.run", () => {
     expect(fakes.herdr.closed).not.toContain("w1:p2"); // 失敗は残す
   });
 
-  it("done に到達せず timeout なら error", async () => {
-    const fakes = makeFakes({ done: false });
-    const exec = new HerdrExecutor(makeDeps(fakes));
+  it("transcript の進行が止まって idle timeout を超えたら error・ペインは残す", async () => {
+    // 1 回目の read で進行した後は追記なし → idle timeout 経路に入る。
+    const fakes = makeFakes({ done: false, activitiesPerRead: [["tool: Bash"]] });
+    const exec = new HerdrExecutor(makeDeps(fakes, { idleTimeoutMs: 30 }));
     const result = await exec.run(makeOpts(), makeHooks());
-    expect(result).toEqual({
-      ok: false,
-      error: "agent did not reach done before timeout",
+    expect(result.ok).toBe(false);
+    expect(result.ok === false && result.error).toContain("idle timeout");
+    // timeout 確定の直前に agent_status を再確認している (done でないので失敗確定)
+    expect(fakes.herdr.statusCalls).toContain("w1:p2");
+    expect(fakes.herdr.closed).not.toContain("w1:p2"); // 調査のため残す
+  });
+
+  it("transcript が進行し続ける限り waitDone の窓 timeout を跨いでも failed にならない", async () => {
+    // fake clock: now() 呼び出しごとに 10 分進む。実装既定と同じ 30 分の
+    // idleTimeoutMs でも、追記が続く限り総経過 (数時間相当) では timeout しない。
+    let fakeMs = 0;
+    const now = () => (fakeMs += 10 * 60_000);
+    const closed: string[] = [];
+    let waitDoneCalls = 0;
+    const herdr: HerdrClient = {
+      createPane: async () => "w1:p2",
+      startAgent: async () => {},
+      // 2 回は窓 timeout (false → 張り直し)。旧実装の固定 doneTimeout なら
+      // 1 回目の false で failed になっていた経路。3 回目で done に達する。
+      waitDone: async () => {
+        waitDoneCalls += 1;
+        if (waitDoneCalls < 3) return false;
+        await new Promise((r) => setTimeout(r, 30));
+        return true;
+      },
+      agentStatus: async () => "running",
+      closePane: async (p) => {
+        closed.push(p);
+      },
+    };
+    let n = 0;
+    const transcript: TranscriptReader = {
+      waitForSession: async () => ({ path: "/tr/s.jsonl", sessionId: "sess-1" }),
+      // 毎回追記あり = 進行が続いている
+      readActivitySince: async (_p, from) => ({
+        activities: [`act-${(n += 1)}`],
+        nextOffset: from + 1,
+      }),
+    };
+    const exec = new HerdrExecutor(
+      makeDeps(makeFakes({}), {
+        herdr,
+        transcript,
+        now,
+        idleTimeoutMs: 30 * 60_000,
+      }),
+    );
+    const result = await exec.run(makeOpts(), makeHooks());
+    expect(result).toEqual({ ok: true });
+    expect(waitDoneCalls).toBe(3);
+    expect(fakeMs).toBeGreaterThan(30 * 60_000); // 経過は従来の 30 分を大きく超える
+    expect(closed).toContain("w1:p2"); // 成功なのでペインを閉じる
+  });
+
+  it("idle timeout 確定の直前に agent_status が done なら成功として扱う", async () => {
+    // waitDone は done を報せず、transcript も進まないが、実際には done 済みのケース。
+    const fakes = makeFakes({
+      done: false,
+      activitiesPerRead: [[]],
+      agentStatus: "done",
     });
+    const exec = new HerdrExecutor(makeDeps(fakes, { idleTimeoutMs: 20 }));
+    const result = await exec.run(makeOpts(), makeHooks());
+    expect(result).toEqual({ ok: true });
+    expect(fakes.herdr.statusCalls).toContain("w1:p2");
+    expect(fakes.herdr.closed).toContain("w1:p2"); // 成功なのでペインを閉じる
   });
 
   it("開始前に abort 済みなら起動せず error・ペインを閉じる", async () => {

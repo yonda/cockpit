@@ -65,10 +65,15 @@ export type SubTaskState =
   | "skipped"; // 人間がスキップ指示
 
 const SUBTASK_TRANSITIONS: Record<SubTaskState, readonly SubTaskState[]> = {
-  pending: ["running", "skipped", "failed"],
+  // pending -> in_review / merged は発射前ガードが branch の既存 PR を検知した
+  // ときの整合遷移（job を作らず PR の実態に合わせる）。
+  pending: ["running", "in_review", "merged", "skipped", "failed"],
   running: ["in_review", "done_no_pr", "failed", "skipped"],
   in_review: ["merged", "failed", "skipped"],
-  failed: ["running", "pending", "skipped"], // 失敗 → リトライ / スキップ
+  // 失敗 → リトライ / スキップ。in_review / merged はブランチ名の PR
+  // フォールバック検索による自動回復（poller が実態に合わせて戻す）。
+  // done_no_pr は人間の完了操作 (markTaskDone) で PR がない場合の遷移先。
+  failed: ["running", "pending", "in_review", "merged", "done_no_pr", "skipped"],
   merged: [],
   done_no_pr: [], // 終端（PR なし完了）
   skipped: [],
@@ -183,6 +188,11 @@ export type PbiRunnerRequest =
   | {
       id: string;
       method: "pbi.skipTask";
+      params: { pbiId: string; key: string };
+    }
+  | {
+      id: string;
+      method: "pbi.markTaskDone";
       params: { pbiId: string; key: string };
     }
   | { id: string; method: "pbi.cancel"; params: { pbiId: string } }

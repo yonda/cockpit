@@ -15,28 +15,87 @@ function clearEscalationsFor(
   }
 }
 
-export function retryTask(
+export async function retryTask(
   deps: PbiExecutorDeps,
   pbiId: string,
   key: string,
-): void {
-  deps.pbiStore.transitionSubTask(pbiId, key, "pending", { jobId: null });
+): Promise<void> {
+  // jobId は null にせず残す。failed が誤判定（前ジョブがまだ稼働中）だった場合に
+  // dispatchReady の発射前ガードが前ジョブの生存を確認して二重発射を防げるようにする。
+  deps.pbiStore.transitionSubTask(pbiId, key, "pending");
   clearEscalationsFor(deps.pbiStore, pbiId, key);
-  dispatchReady(deps, pbiId);
+  await dispatchReady(deps, pbiId);
 }
 
-export function skipTask(
+export async function skipTask(
   deps: PbiExecutorDeps,
   pbiId: string,
   key: string,
-): void {
+): Promise<void> {
   deps.pbiStore.transitionSubTask(pbiId, key, "skipped");
   clearEscalationsFor(deps.pbiStore, pbiId, key);
   const pbi = deps.pbiStore.get(pbiId)!;
   if (pbi.status === "executing" && isPbiComplete(pbi.subTasks)) {
     deps.pbiStore.transition(pbiId, "completed");
   } else {
-    dispatchReady(deps, pbiId);
+    await dispatchReady(deps, pbiId);
+  }
+}
+
+/**
+ * 実成果がある failed sub-task を人間が明示的に完了として扱う。
+ * branch の PR をフォールバック検索し、merged なら実態に合わせて merged
+ * （prUrl 記録）、それ以外は done_no_pr へ遷移させる。
+ */
+export async function markTaskDone(
+  deps: PbiExecutorDeps,
+  pbiId: string,
+  key: string,
+): Promise<void> {
+  const pbi = deps.pbiStore.get(pbiId);
+  if (!pbi) throw new Error(`unknown pbi: ${pbiId}`);
+  const task = pbi.subTasks.find((t) => t.key === key);
+  if (!task) throw new Error(`unknown sub-task: ${key} (${pbiId})`);
+  // failed 専用の回復操作。running -> done_no_pr は状態機械上は合法（差分なし
+  // 完了）だが、実行中ジョブを孤児化させるため人間の完了操作としては gh 呼び出し
+  // より前に拒否する。他の状態は transitionSubTask (canSubTaskTransition) でも弾かれる。
+  if (task.state !== "failed") {
+    throw new Error(
+      `invalid sub-task transition: ${task.state} -> done_no_pr (${pbiId}/${key})`,
+    );
+  }
+
+  let to: "merged" | "done_no_pr" = "done_no_pr";
+  let patch: { prUrl?: string } = {};
+  if (task.branch && deps.github) {
+    const pr = await deps.github.prStateForBranch(pbi.repo, task.branch);
+    if (pr.kind === "merged") {
+      to = "merged";
+      patch = { prUrl: pr.url };
+    }
+  }
+  deps.pbiStore.transitionSubTask(pbiId, key, to, patch);
+  clearEscalationsFor(deps.pbiStore, pbiId, key);
+
+  // 完了扱いにした sub-issue は poller の merged 経路と同様にクローズする。
+  // 失敗しても状態遷移や後続発射を止めない (best-effort)。
+  if (task.issueNumber != null && deps.github) {
+    try {
+      await deps.github.closeIssue(pbi.repo, task.issueNumber);
+    } catch (err) {
+      console.error(
+        `[pbi-actions] closeIssue failed (${pbi.repo}#${task.issueNumber}): ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+  }
+
+  const fresh = deps.pbiStore.get(pbiId)!;
+  if (fresh.status === "executing" && isPbiComplete(fresh.subTasks)) {
+    deps.pbiStore.transition(pbiId, "completed");
+  } else {
+    await dispatchReady(deps, pbiId);
   }
 }
 
@@ -44,9 +103,12 @@ export function pausePbi(store: PbiStore, pbiId: string): void {
   store.update(pbiId, { paused: true });
 }
 
-export function resumePbi(deps: PbiExecutorDeps, pbiId: string): void {
+export async function resumePbi(
+  deps: PbiExecutorDeps,
+  pbiId: string,
+): Promise<void> {
   deps.pbiStore.update(pbiId, { paused: false });
-  dispatchReady(deps, pbiId);
+  await dispatchReady(deps, pbiId);
 }
 
 export function cancelPbi(deps: PbiExecutorDeps, pbiId: string): void {

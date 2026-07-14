@@ -16,7 +16,12 @@ import type {
   ExecutorRunOpts,
 } from "../executor";
 import { buildBranchName, runIssueJob, type WorkflowDeps } from "../workflow";
-import { NO_CHANGES_MARKER } from "../../lib/pbi/types";
+import { NO_CHANGES_MARKER, type SubTaskRecord } from "../../lib/pbi/types";
+import type { GitHubClient, PrState } from "../github";
+import { PbiStore } from "../pbi-store";
+import { Scheduler } from "../scheduler";
+import { onJobUpdated, type PbiExecutorDeps } from "../pbi-executor";
+import { pollOnce } from "../pbi-poller";
 
 let dir: string;
 let store: JobStore;
@@ -41,8 +46,10 @@ class FakeCommands implements CommandRunner {
     cwd: string;
     env?: Record<string, string>;
   }> = [];
-  /** `gh pr list` が返す URL。null なら空配列を返す */
-  prUrl: string | null = "https://github.com/yonda/cockpit/pull/9";
+  /** `gh pr list` が返す PR の配列 (--state all 相当)。空配列なら PR なし */
+  prs: Array<{ url: string; state: string }> = [
+    { url: "https://github.com/yonda/cockpit/pull/9", state: "OPEN" },
+  ];
   /** `gh api .../comments` が返すコメント本文の配列 */
   issueComments: string[] = [];
   /** 作成済み worktree のセット (git worktree add が呼ばれたブランチ) */
@@ -72,7 +79,7 @@ class FakeCommands implements CommandRunner {
     }
     if (cmd === "gh" && args[0] === "pr") {
       return {
-        stdout: JSON.stringify(this.prUrl ? [{ url: this.prUrl }] : []),
+        stdout: JSON.stringify(this.prs),
         stderr: "",
       };
     }
@@ -283,7 +290,7 @@ describe("runIssueJob", () => {
 
   it("fails when no PR exists after the agent finishes", async () => {
     const deps = makeDeps();
-    deps.commands.prUrl = null;
+    deps.commands.prs = [];
     const job = store.create({
       repo: "yonda/cockpit",
       issueNumber: 1,
@@ -296,6 +303,110 @@ describe("runIssueJob", () => {
     const final = store.get(job.id)!;
     expect(final.status).toBe("failed");
     expect(final.error).toMatch(/draft PR/);
+  });
+
+  it("queries PRs with --state all so merged PRs are visible", async () => {
+    const deps = makeDeps();
+    const job = store.create({
+      repo: "yonda/cockpit",
+      issueNumber: 1,
+      issueTitle: "test issue",
+      branch: "feature/1-test-issue",
+    });
+
+    await runIssueJob(deps, job.id, new AbortController().signal);
+
+    expect(deps.commands.calls).toContain(
+      "gh pr list --head feature/1-test-issue --state all --json url,state",
+    );
+  });
+
+  it("transitions to done with the PR url when the branch PR is already merged", async () => {
+    const deps = makeDeps();
+    deps.commands.prs = [
+      { url: "https://github.com/yonda/cockpit/pull/9", state: "MERGED" },
+    ];
+    const job = store.create({
+      repo: "yonda/cockpit",
+      issueNumber: 1,
+      issueTitle: "test issue",
+      branch: "feature/1-test-issue",
+    });
+
+    await runIssueJob(deps, job.id, new AbortController().signal);
+
+    const final = store.get(job.id)!;
+    expect(final.status).toBe("done");
+    expect(final.prUrl).toBe("https://github.com/yonda/cockpit/pull/9");
+    expect(final.error).toBeNull();
+  });
+
+  it("prefers the open PR when both open and merged PRs exist for the branch", async () => {
+    const deps = makeDeps();
+    deps.commands.prs = [
+      { url: "https://github.com/yonda/cockpit/pull/8", state: "MERGED" },
+      { url: "https://github.com/yonda/cockpit/pull/9", state: "OPEN" },
+    ];
+    const job = store.create({
+      repo: "yonda/cockpit",
+      issueNumber: 1,
+      issueTitle: "test issue",
+      branch: "feature/1-test-issue",
+    });
+
+    await runIssueJob(deps, job.id, new AbortController().signal);
+
+    const final = store.get(job.id)!;
+    expect(final.status).toBe("done");
+    expect(final.prUrl).toBe("https://github.com/yonda/cockpit/pull/9");
+  });
+
+  it("falls back to the marker check when the only PR is closed unmerged", async () => {
+    const deps = makeDeps();
+    deps.commands.prs = [
+      { url: "https://github.com/yonda/cockpit/pull/9", state: "CLOSED" },
+    ];
+    deps.commands.issueComments = ["ただの進捗コメント（マーカーなし）"];
+    const job = store.create({
+      repo: "yonda/cockpit",
+      issueNumber: 1,
+      issueTitle: "test issue",
+      branch: "feature/1-test-issue",
+    });
+
+    await runIssueJob(deps, job.id, new AbortController().signal);
+
+    const final = store.get(job.id)!;
+    // unmerged closed は成果とみなさず、マーカーなしなら従来どおり failed
+    expect(final.status).toBe("failed");
+    expect(final.error).toMatch(/draft PR/);
+    // マーカーの外部検証 (gh api) にフォールバックしている
+    expect(deps.commands.calls).toContain(
+      "gh api /repos/yonda/cockpit/issues/1/comments",
+    );
+  });
+
+  it("closed unmerged PR + marker comment resolves as done (noChanges)", async () => {
+    const deps = makeDeps();
+    deps.commands.prs = [
+      { url: "https://github.com/yonda/cockpit/pull/9", state: "CLOSED" },
+    ];
+    deps.commands.issueComments = [
+      `検証しました。既に対応済みのため差分は不要です。\n${NO_CHANGES_MARKER}`,
+    ];
+    const job = store.create({
+      repo: "yonda/cockpit",
+      issueNumber: 1,
+      issueTitle: "test issue",
+      branch: "feature/1-test-issue",
+    });
+
+    await runIssueJob(deps, job.id, new AbortController().signal);
+
+    const final = store.get(job.id)!;
+    expect(final.status).toBe("done");
+    expect(final.noChanges).toBe(true);
+    expect(final.prUrl).toBeNull();
   });
 
   it("instructs how to declare no-changes with the marker comment", async () => {
@@ -335,7 +446,7 @@ describe("runIssueJob", () => {
 
   it("transitions to done (noChanges) when the issue has a marker comment but no PR", async () => {
     const deps = makeDeps();
-    deps.commands.prUrl = null; // draft PR は見つからない
+    deps.commands.prs = []; // draft PR は見つからない
     deps.commands.issueComments = [
       `検証しました。既に対応済みのため差分は不要です。\n${NO_CHANGES_MARKER}`,
     ];
@@ -360,7 +471,7 @@ describe("runIssueJob", () => {
 
   it("fails when no PR exists and no marker comment is present", async () => {
     const deps = makeDeps();
-    deps.commands.prUrl = null;
+    deps.commands.prs = [];
     deps.commands.issueComments = ["ただの進捗コメント（マーカーなし）"];
     const job = store.create({
       repo: "yonda/cockpit",
@@ -710,6 +821,101 @@ describe("runIssueJob", () => {
     expect(ghCalls.length).toBeGreaterThan(0);
     for (const call of ghCalls) {
       expect(call.env?.GH_TOKEN).toBe("test-token");
+    }
+  });
+
+  it("merged PR 完了が PBI 側の done → in_review → poller merged 検知に prUrl 付きで乗る", async () => {
+    // job done (merged PR) → onJobUpdated → sub-task in_review (prUrl 付き) →
+    // poller の merged 検知 → sub-task merged / PBI completed、という既存の
+    // PBI 側フローが偽陰性なく成立することを end-to-end で確認する。
+    class FakeGitHub implements GitHubClient {
+      closed: number[] = [];
+      prStates: Record<string, PrState> = {};
+      async fetchIssue() {
+        return { title: "", body: "" };
+      }
+      async createSubIssue() {
+        return { number: 0, url: "" };
+      }
+      async updateIssueBody() {}
+      async closeIssue(_repo: string, number: number) {
+        this.closed.push(number);
+      }
+      async prStateForBranch(_repo: string, branch: string): Promise<PrState> {
+        return this.prStates[branch] ?? { kind: "none" };
+      }
+      async searchAssignedOpenIssues() {
+        return [];
+      }
+    }
+
+    const mergedUrl = "https://github.com/yonda/cockpit/pull/9";
+    const pbisDir = mkdtempSync(join(tmpdir(), "pbis-"));
+    try {
+      const pbiStore = new PbiStore(pbisDir);
+      pbiStore.loadAll();
+      const pbi = pbiStore.create({
+        repo: "yonda/cockpit",
+        issueNumber: 42,
+        title: "parent PBI",
+      });
+      pbiStore.transition(pbi.id, "awaiting_approval");
+      pbiStore.transition(pbi.id, "executing");
+
+      const deps = makeDeps();
+      deps.commands.prs = [{ url: mergedUrl, state: "MERGED" }];
+      const job = store.create({
+        repo: "yonda/cockpit",
+        issueNumber: 1,
+        issueTitle: "test issue",
+        branch: "feature/1-test-issue",
+      });
+      const subTask: SubTaskRecord = {
+        key: "t1",
+        title: "test issue",
+        goal: "",
+        deliverable: "",
+        acceptanceCriteria: [],
+        dependsOn: [],
+        state: "running",
+        issueNumber: 1,
+        jobId: job.id,
+        branch: "feature/1-test-issue",
+        prUrl: null,
+      };
+      pbiStore.setSubTasks(pbi.id, [subTask]);
+
+      const scheduler = new Scheduler(deps, {
+        runJob: async (d, jobId) => {
+          d.store.transition(jobId, "running");
+        },
+      });
+      const exec: PbiExecutorDeps = { pbiStore, jobStore: store, scheduler };
+
+      // 1. runIssueJob: merged PR でも done + prUrl になる（偽陰性 failed にならない）
+      await runIssueJob(deps, job.id, new AbortController().signal);
+      const doneJob = store.get(job.id)!;
+      expect(doneJob.status).toBe("done");
+      expect(doneJob.prUrl).toBe(mergedUrl);
+
+      // 2. onJobUpdated: done を受けて sub-task が prUrl 付きで in_review に遷移する
+      await onJobUpdated(exec, doneJob);
+      const inReview = pbiStore.get(pbi.id)!.subTasks[0];
+      expect(inReview.state).toBe("in_review");
+      expect(inReview.prUrl).toBe(mergedUrl);
+
+      // 3. poller: merged を検知して sub-issue close + sub-task merged + PBI completed
+      const github = new FakeGitHub();
+      github.prStates["feature/1-test-issue"] = { kind: "merged", url: mergedUrl };
+      await pollOnce({ pbiStore, github, exec });
+
+      const after = pbiStore.get(pbi.id)!;
+      expect(after.subTasks[0].state).toBe("merged");
+      expect(after.subTasks[0].prUrl).toBe(mergedUrl);
+      expect(github.closed).toEqual([1]);
+      expect(after.status).toBe("completed");
+    } finally {
+      rmSync(pbisDir, { recursive: true, force: true });
     }
   });
 });
