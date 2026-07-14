@@ -1,5 +1,7 @@
 # permission-policy dogfood 検証メモ (Issue #25)
 
+> **⚠️ Superseded (2026-07-14, #148)** — 本メモが対象とする runner の `permission-policy.ts`（canUseTool 経路）は [issue-driver 転換](https://github.com/yonda/cockpit/issues/148) で退役しました（runner コードは #149 で削除）。default-allow + 危険操作のみ拒否の思想は統一プロファイル(#85)に引き継がれています。本メモは当時の検証記録として残します。
+
 反転後の許可モデル (default-allow + 危険操作のみ cockpit へ転送) について、
 実 PBI ジョブのツール実行ストリームで「通常作業がプロンプトフリーになる」
 「危険操作は転送される」を検証し、見つかった過剰転送・判定漏れを

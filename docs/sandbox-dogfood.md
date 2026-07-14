@@ -1,5 +1,7 @@
 # sandbox (Seatbelt) dogfood 実機検証メモ (Issue #39)
 
+> **⚠️ Superseded (2026-07-14, #148)** — runner 中心の実行アーキテクチャは [issue-driver 転換](https://github.com/yonda/cockpit/issues/148) で退役しました（runner コードは #149 で削除）。本メモは当時の検証記録として残します。sandbox（統一プロファイルの Seatbelt）自体は土台として存続します。
+
 配線済みの物理隔離 (Layer 1 = Seatbelt) と許可モデル (Layer 0 = permission-policy) を、
 実 PBI ジョブと同じ SDK 経路 (`query({ options: { sandbox, canUseTool } })`) で実機に流し、
 受け入れ基準を検証した記録。PoC (Issue #36 / docs/sandbox-poc.md) が「使い捨ての実験専用設定」で

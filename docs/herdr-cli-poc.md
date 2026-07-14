@@ -1,5 +1,7 @@
 # herdr/CLI 構成 PoC 検証メモ (Issue #56)
 
+> **⚠️ Superseded (2026-07-14, #148)** — 本メモが前段とする HerdrExecutor 実装は [issue-driver 転換](https://github.com/yonda/cockpit/issues/148) で退役しました（runner コードは #149 で削除）。ただし「herdr ペインの素の Claude Code をそのまま実行基盤にする」という PoC の結論は issue-driver の実行モデルに直結しており、設計の起点として残します。
+
 docs/permission-philosophy.md 移行パス step 3「HerdrExecutor」実装の前段として、
 基準文書に列挙した要検証ポイントを実機で消化した記録。結論として全項目クリアで、
 HerdrExecutor は列挙した構成で実装可能。

@@ -1,5 +1,7 @@
 # 権限設計の思想 — マネージャーと開発チームのモデル
 
+> **⚠️ Superseded (2026-07-14, #148)** — 本ドキュメントが前提とする runner 中心の実行アーキテクチャ（4層権限モデル・settings 注入・HerdrExecutor/SdkExecutor・profile-check）は [issue-driver 転換](https://github.com/yonda/cockpit/issues/148) で退役しました（runner コードは #149 で削除）。ただし「tool call ごとの承認地獄をどう解くか」「exfiltration をどう防ぐか」という思考の骨格は転換後の設計土台なので、**歴史記録 + 設計の出発点**として残します。実行は今後 issue-driver skill（人間の統一プロファイル ~/.claude/settings.json でそのまま動く）が担い、cockpit は kick + レンズに徹します。
+
 cockpit / runner の権限設計を「tool call ごとの承認」から
 「成果物レビュー + 構造的ガード」へ転換するための思想ドキュメント。
 2026-07-13 の設計議論の結論をまとめたもの。実装 Issue はこの文書を基準に切る。
