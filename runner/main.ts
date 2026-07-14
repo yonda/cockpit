@@ -36,18 +36,11 @@ function main(): void {
   // 実装ジョブの executor。既定は SdkExecutor、COCKPIT_EXECUTOR=herdr のときだけ
   // HerdrExecutor (herdr ペイン実行) に差し替える (#58 垂直スライスのオプトイン配線)。
   // 分解ジョブ (lifecycle) は headless の読み取り解析なので SdkExecutor のまま。
-  // オプトインの設定不備で HerdrExecutor 構築が throw しても、デーモン全体 (分解・
-  // lifecycle 含む) を落とさず SdkExecutor に degrade する (herdr 経路だけ無効化)。
-  let implementExecutor: AgentExecutor = new SdkExecutor();
-  try {
-    implementExecutor = buildHerdrExecutorFromEnv() ?? implementExecutor;
-  } catch (err) {
-    console.error(
-      `[runner] HerdrExecutor 構築に失敗したため SdkExecutor に degrade します: ${
-        err instanceof Error ? err.message : String(err)
-      }`,
-    );
-  }
+  // 実行環境統一 (#85): herdr オプトイン時に構築が throw したら (統一プロファイル
+  // 違反・設定不備) SdkExecutor に degrade せず、デーモンごと fail-closed で落とす。
+  // 違反検出時にこそ旧プロファイルの実行系が復活する二重状態を許さない。
+  const implementExecutor: AgentExecutor =
+    buildHerdrExecutorFromEnv() ?? new SdkExecutor();
   if (implementExecutor.constructor.name === "HerdrExecutor") {
     console.log("[runner] implement executor: HerdrExecutor (herdr pane)");
   }

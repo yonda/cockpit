@@ -29,7 +29,6 @@ export interface HerdrClient {
     paneId: string,
     opts: {
       cwd: string;
-      settingsPath: string;
       prompt: string;
       resumeSessionId: string | null;
       githubToken: string | null;
@@ -69,8 +68,12 @@ export type HerdrExecutorDeps = {
   transcript: TranscriptReader;
   /** worktree を事前 trust する (hasTrustDialogAccepted)。CLI の untrusted 無視を避ける。 */
   trustWorktree(cwd: string): Promise<void>;
-  /** dispatcher 管理の固定 settings (PoC で確定した sandbox/deny/hook)。 */
-  settingsPath: string;
+  /**
+   * 統一プロファイルの不変条件検証 (違反なら throw)。デーモン起動時に加えて
+   * spawn 毎に呼ぶ — 起動後にユーザー settings が壊れても次のジョブから
+   * fail-closed で止める (起動時 1 回きり検証の TOCTOU 対策)。
+   */
+  verifyProfile(): void;
   /** タブを作る herdr ワークスペース ID。 */
   workspaceId: string;
   /** 現在時刻 (ms)。テスト注入用。既定は Date.now。 */
@@ -131,6 +134,9 @@ export class HerdrExecutor implements AgentExecutor {
     let outcome: "success" | "keep" = "success";
 
     try {
+      // spawn 直前の再検証: ユーザー settings が統一プロファイルを満たさなく
+      // なっていたら、このジョブを fail-closed で失敗させる (spawn しない)。
+      this.deps.verifyProfile();
       await this.deps.trustWorktree(opts.cwd);
 
       const startedAt = now();
@@ -151,7 +157,6 @@ export class HerdrExecutor implements AgentExecutor {
       try {
         await this.deps.herdr.startAgent(paneId, {
           cwd: opts.cwd,
-          settingsPath: this.deps.settingsPath,
           prompt: opts.prompt,
           resumeSessionId: opts.resumeSessionId,
           githubToken: opts.githubToken,

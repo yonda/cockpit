@@ -62,7 +62,6 @@ export class RealHerdrClient implements HerdrClient {
     paneId: string,
     opts: {
       cwd: string;
-      settingsPath: string;
       prompt: string;
       resumeSessionId: string | null;
       githubToken: string | null;
@@ -74,9 +73,9 @@ export class RealHerdrClient implements HerdrClient {
     const tokenPrefix = opts.githubToken
       ? `GH_TOKEN=${shellQuote(opts.githubToken)} `
       : "";
-    const launch = `cd ${shellQuote(opts.cwd)} && ${tokenPrefix}claude --settings ${shellQuote(
-      opts.settingsPath,
-    )}${resumeFlag}`;
+    // 実行環境統一 (#85): --settings は渡さない。人間と同じユーザー settings
+    // (統一プロファイル) を継承する。不変条件は起動時に profile-check が検証済み。
+    const launch = `cd ${shellQuote(opts.cwd)} && ${tokenPrefix}claude${resumeFlag}`;
     try {
       await herdr(["pane", "run", paneId, launch]);
     } catch (err) {
