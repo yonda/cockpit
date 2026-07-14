@@ -95,6 +95,7 @@ function makeDeps(fakes: Fakes, over: Partial<HerdrExecutorDeps> = {}) {
     herdr: fakes.herdr,
     transcript: fakes.transcript,
     trustWorktree: vi.fn(async () => {}),
+    verifyProfile: vi.fn(),
     workspaceId: "w1",
     pollIntervalMs: 1,
     sessionTimeoutMs: 100,
@@ -218,5 +219,20 @@ describe("HerdrExecutor.run", () => {
     expect(result.ok).toBe(false);
     expect(fakes.herdr.startCalls).toHaveLength(0);
     expect(fakes.herdr.closed).toContain("w1:p2");
+  });
+
+  it("verifyProfile が throw したら spawn せず error (統一プロファイル違反の fail-closed)", async () => {
+    const fakes = makeFakes({});
+    const exec = new HerdrExecutor(
+      makeDeps(fakes, {
+        verifyProfile: () => {
+          throw new Error("統一プロファイル違反");
+        },
+      }),
+    );
+    const result = await exec.run(makeOpts({}), makeHooks());
+    expect(result.ok).toBe(false);
+    expect(result.ok === false && result.error).toContain("統一プロファイル違反");
+    expect(fakes.herdr.startCalls).toHaveLength(0);
   });
 });

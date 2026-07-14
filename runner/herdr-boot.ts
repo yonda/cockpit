@@ -31,6 +31,7 @@ export function buildHerdrExecutorFromEnv(): AgentExecutor | null {
     herdr: new RealHerdrClient(),
     transcript: new RealTranscriptReader(),
     trustWorktree,
+    verifyProfile: assertUnifiedProfile,
     workspaceId,
   });
 }
