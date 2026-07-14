@@ -9,9 +9,11 @@ import { PbiStore } from "../pbi-store";
 import { RepoRegistry } from "../repo-registry";
 import { Scheduler } from "../scheduler";
 import { InputBroker } from "../input-broker";
+import type { GitHubClient, PrState } from "../github";
 import { onJobUpdated, type PbiExecutorDeps } from "../pbi-executor";
 import {
   cancelPbi,
+  markTaskDone,
   pausePbi,
   resumePbi,
   retryTask,
@@ -105,6 +107,132 @@ describe("skipTask", () => {
     const after = pbiStore.get(pbiId)!;
     expect(after.subTasks[0].state).toBe("skipped");
     expect(after.escalations).toHaveLength(0);
+    expect(after.status).toBe("completed");
+  });
+});
+
+describe("markTaskDone", () => {
+  class FakeGitHub implements GitHubClient {
+    prState: PrState = { kind: "none" };
+    prLookups: string[] = [];
+    closedIssues: number[] = [];
+    closeIssueError: Error | null = null;
+    async fetchIssue() {
+      return { title: "t", body: "" };
+    }
+    async createSubIssue() {
+      return { number: 1, url: "u" };
+    }
+    async updateIssueBody() {}
+    async closeIssue(_repo: string, number: number) {
+      if (this.closeIssueError) throw this.closeIssueError;
+      this.closedIssues.push(number);
+    }
+    async prStateForBranch(_repo: string, branch: string): Promise<PrState> {
+      this.prLookups.push(branch);
+      return this.prState;
+    }
+    async searchAssignedOpenIssues() {
+      return [];
+    }
+  }
+
+  let github: FakeGitHub;
+  beforeEach(() => {
+    github = new FakeGitHub();
+    deps = { ...deps, github };
+  });
+
+  it("moves a failed task with a merged PR to merged (prUrl recorded), clears escalations, closes the sub-issue, and completes the PBI", async () => {
+    const pbiId = executing();
+    pbiStore.setSubTasks(pbiId, [rec({ key: "t1", state: "failed" })]);
+    pbiStore.addEscalation(pbiId, {
+      kind: "task_failed",
+      subTaskKey: "t1",
+      detail: "boom",
+    });
+    github.prState = { kind: "merged", url: "https://pr/1" };
+
+    await markTaskDone(deps, pbiId, "t1");
+
+    const after = pbiStore.get(pbiId)!;
+    expect(after.subTasks[0].state).toBe("merged");
+    expect(after.subTasks[0].prUrl).toBe("https://pr/1");
+    expect(after.escalations).toHaveLength(0);
+    expect(github.prLookups).toEqual(["feature/100-t"]);
+    expect(github.closedIssues).toEqual([100]);
+    expect(after.status).toBe("completed");
+  });
+
+  it("moves a failed task without a merged PR to done_no_pr and completes the PBI", async () => {
+    const pbiId = executing();
+    pbiStore.setSubTasks(pbiId, [rec({ key: "t1", state: "failed" })]);
+    github.prState = { kind: "closed", url: "https://pr/1" };
+
+    await markTaskDone(deps, pbiId, "t1");
+
+    const after = pbiStore.get(pbiId)!;
+    expect(after.subTasks[0].state).toBe("done_no_pr");
+    expect(after.subTasks[0].prUrl).toBeNull();
+    expect(after.status).toBe("completed");
+  });
+
+  it("falls back to done_no_pr when the github client is absent", async () => {
+    const pbiId = executing();
+    pbiStore.setSubTasks(pbiId, [rec({ key: "t1", state: "failed" })]);
+
+    await markTaskDone({ ...deps, github: undefined }, pbiId, "t1");
+
+    expect(pbiStore.get(pbiId)!.subTasks[0].state).toBe("done_no_pr");
+  });
+
+  it("dispatches dependent tasks after marking done (skipTask 同系の次発射)", async () => {
+    const pbiId = executing();
+    pbiStore.setSubTasks(pbiId, [
+      rec({ key: "t1", state: "failed" }),
+      rec({ key: "t2", issueNumber: 101, branch: null, dependsOn: ["t1"] }),
+    ]);
+
+    await markTaskDone(deps, pbiId, "t1");
+
+    const after = pbiStore.get(pbiId)!;
+    expect(after.status).toBe("executing");
+    expect(after.subTasks[1].state).toBe("running");
+    expect(jobStore.list()).toHaveLength(1);
+  });
+
+  it("rejects non-failed sub-tasks before touching GitHub", async () => {
+    const pbiId = executing();
+    pbiStore.setSubTasks(pbiId, [rec({ key: "t1", state: "running" })]);
+
+    await expect(markTaskDone(deps, pbiId, "t1")).rejects.toThrow(
+      /invalid sub-task transition: running -> done_no_pr/,
+    );
+    expect(github.prLookups).toHaveLength(0);
+    expect(pbiStore.get(pbiId)!.subTasks[0].state).toBe("running");
+  });
+
+  it("rejects unknown pbi / sub-task keys", async () => {
+    const pbiId = executing();
+    pbiStore.setSubTasks(pbiId, [rec({ key: "t1", state: "failed" })]);
+
+    await expect(markTaskDone(deps, "pbi-nope", "t1")).rejects.toThrow(
+      /unknown pbi/,
+    );
+    await expect(markTaskDone(deps, pbiId, "t9")).rejects.toThrow(
+      /unknown sub-task/,
+    );
+  });
+
+  it("does not block completion when closeIssue fails (best-effort)", async () => {
+    const pbiId = executing();
+    pbiStore.setSubTasks(pbiId, [rec({ key: "t1", state: "failed" })]);
+    github.closeIssueError = new Error("gh down");
+
+    await markTaskDone(deps, pbiId, "t1");
+
+    const after = pbiStore.get(pbiId)!;
+    expect(after.subTasks[0].state).toBe("done_no_pr");
     expect(after.status).toBe("completed");
   });
 });

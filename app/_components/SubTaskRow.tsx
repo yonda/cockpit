@@ -97,6 +97,9 @@ export function SubTaskRow({
           <button type="button" disabled={busy} onClick={() => act("retry")} className="border border-[var(--accent)]/60 px-2 py-0.5 font-mono text-[10px] text-[var(--accent)] hover:bg-[var(--accent)]/10">
             リトライ
           </button>
+          <button type="button" disabled={busy} onClick={() => act("done")} className="border border-[var(--signal-ok)]/60 px-2 py-0.5 font-mono text-[10px] text-[var(--signal-ok)] hover:bg-[var(--signal-ok)]/10">
+            完了扱い
+          </button>
           <button type="button" disabled={busy} onClick={() => act("skip")} className="border border-[var(--hairline)] px-2 py-0.5 font-mono text-[10px] text-[var(--ink-muted)] hover:border-[var(--ink)]">
             スキップ
           </button>
