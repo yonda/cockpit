@@ -36,6 +36,7 @@ const fakeGithub = (over: Partial<GitHubClient> = {}): GitHubClient => ({
   },
   closeIssue: async () => {},
   prStateForBranch: async () => ({ kind: "none" }),
+  searchAssignedOpenIssues: async () => [],
   ...over,
 });
 

@@ -201,6 +201,98 @@ describe("RealGitHubClient.prStateForBranch", () => {
   });
 });
 
+describe("RealGitHubClient.searchAssignedOpenIssues", () => {
+  it("owner のトークンを env に載せて gh search を呼び JSON をマップする", async () => {
+    const calls: Array<{ args: string[]; env?: Record<string, string> }> = [];
+    const commands = {
+      run: async (
+        _c: string,
+        args: string[],
+        opts: { cwd: string; env?: Record<string, string> },
+      ) => {
+        calls.push({ args, env: opts.env });
+        return {
+          stdout: JSON.stringify([
+            {
+              number: 71,
+              title: "owner 別トークン",
+              url: "https://github.com/acme/widget/issues/71",
+              createdAt: "2026-07-14T00:00:00Z",
+              labels: [{ name: "pbi" }, { name: "runner" }],
+              repository: { nameWithOwner: "acme/widget" },
+            },
+          ]),
+          stderr: "",
+        };
+      },
+    };
+    const client = new RealGitHubClient(commands, (owner) => `tok-${owner}`);
+
+    const res = await client.searchAssignedOpenIssues("acme");
+
+    expect(res).toEqual([
+      {
+        repo: "acme/widget",
+        issueNumber: 71,
+        title: "owner 別トークン",
+        url: "https://github.com/acme/widget/issues/71",
+        createdAt: "2026-07-14T00:00:00Z",
+        labels: ["pbi", "runner"],
+      },
+    ]);
+    // owner の GH_TOKEN が env に載る
+    expect(calls[0].env?.GH_TOKEN).toBe("tok-acme");
+    // 検索条件: assignee:@me / is:open / is:issue のみ、ラベル絞り込みなし
+    const argsStr = calls[0].args.join(" ");
+    expect(calls[0].args).toContain("search");
+    expect(calls[0].args).toContain("issues");
+    expect(argsStr).toContain("--assignee @me");
+    expect(argsStr).toContain("--state open");
+    expect(argsStr).toContain("--owner acme");
+    // ラベル絞り込みフラグ (--label) は使わない (--json の labels フィールドとは別)
+    expect(calls[0].args).not.toContain("--label");
+  });
+
+  it("labels / repository が欠けていても安全にマップする", async () => {
+    const commands = new FakeCommands();
+    commands.responses.push({
+      stdout: JSON.stringify([
+        {
+          number: 5,
+          title: "T",
+          url: "u",
+          createdAt: "2026-07-14T00:00:00Z",
+        },
+      ]),
+      stderr: "",
+    });
+    const client = new RealGitHubClient(commands, resolveToken);
+    const res = await client.searchAssignedOpenIssues("acme");
+    expect(res).toEqual([
+      {
+        repo: "",
+        issueNumber: 5,
+        title: "T",
+        url: "u",
+        createdAt: "2026-07-14T00:00:00Z",
+        labels: [],
+      },
+    ]);
+  });
+
+  it("resolveToken が throw する場合はそのまま伝播する", async () => {
+    const commands = new FakeCommands();
+    const client = new RealGitHubClient(commands, () => {
+      throw new Error("no token for owner");
+    });
+    await expect(client.searchAssignedOpenIssues("acme")).rejects.toThrow(
+      "no token for owner",
+    );
+    // トークン解決前に落ちるので gh は呼ばれない
+    expect(commands.calls).toHaveLength(0);
+  });
+});
+
 describe("RealGitHubClient token resolution", () => {
   it("repo の owner トークンを解決して gh に渡す", async () => {
     const calls: Array<{ env?: Record<string, string> }> = [];

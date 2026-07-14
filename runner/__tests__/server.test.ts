@@ -52,6 +52,7 @@ beforeEach(() => {
         updateIssueBody: async () => {},
         closeIssue: async () => {},
         prStateForBranch: async () => ({ kind: "none" as const }),
+        searchAssignedOpenIssues: async () => [],
       },
       prepareCwd: async () => ({
         cwd: dir,

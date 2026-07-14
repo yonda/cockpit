@@ -41,6 +41,9 @@ class FakeGitHub implements GitHubClient {
   async prStateForBranch(): Promise<PrState> {
     return { kind: "none" };
   }
+  async searchAssignedOpenIssues() {
+    return [];
+  }
 }
 
 describe("subTaskBranch", () => {
