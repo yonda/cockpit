@@ -147,6 +147,21 @@ describe("fetchOrigin", () => {
       expect(calls).toHaveLength(2);
     });
 
+    it("2 回失敗しても最終リトライ (3 回目) で成功すれば解決する", async () => {
+      const { commands, calls } = failingCommands(
+        2,
+        () => new Error("cannot lock ref 'refs/remotes/origin/main'"),
+      );
+      const { sleep, waits } = fakeSleep();
+
+      await expect(
+        fetchOrigin(commands, "/repo/retry-boundary", "main", { sleep }),
+      ).resolves.toBeUndefined();
+      // 初回 + リトライ 2 回 = 3 回目で成功 (上限が実質 1 回に縮む off-by-one の退行防止)
+      expect(calls).toHaveLength(3);
+      expect(waits).toEqual([500, 500]);
+    });
+
     it("リトライ上限 (2 回) を超えて失敗し続けた場合は最後のエラーが伝播する", async () => {
       let count = 0;
       const { commands, calls } = failingCommands(Infinity, () => {
@@ -175,6 +190,23 @@ describe("fetchOrigin", () => {
       await expect(
         fetchOrigin(commands, "/repo/no-retry", "main", { sleep }),
       ).rejects.toThrow("could not read Username");
+      expect(calls).toHaveLength(1);
+      expect(waits).toEqual([]);
+    });
+
+    it("Error 以外が throw された場合はリトライせず即座に伝播する", async () => {
+      const calls: string[][] = [];
+      const commands: CommandRunner = {
+        async run(_cmd, args) {
+          calls.push(args);
+          throw "cannot lock ref (Error インスタンスではない)";
+        },
+      };
+      const { sleep, waits } = fakeSleep();
+
+      await expect(
+        fetchOrigin(commands, "/repo/non-error", "main", { sleep }),
+      ).rejects.toBe("cannot lock ref (Error インスタンスではない)");
       expect(calls).toHaveLength(1);
       expect(waits).toEqual([]);
     });
