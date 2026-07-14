@@ -315,6 +315,24 @@ describe("runIssueJob", () => {
     expect(prompt).toMatch(/gh issue comment/);
   });
 
+  it("tells the agent to run verification commands one at a time, not chained", async () => {
+    const deps = makeDeps();
+    const job = store.create({
+      repo: "yonda/cockpit",
+      issueNumber: 8,
+      issueTitle: "test issue",
+      branch: "feature/8-test-issue",
+    });
+
+    await runIssueJob(deps, job.id, new AbortController().signal);
+
+    const prompt = deps.executor.lastOpts!.prompt;
+    // Issue #75: 複合ワンライナー (`&&`/パイプ/リダイレクトを重ねたもの) はサンドボックス
+    // 自動許可の判定を外れて承認待ちで停止しうるため、1 コマンドずつ実行させる指示がある
+    expect(prompt).toContain("1 コマンドずつ");
+    expect(prompt).toMatch(/&&/);
+  });
+
   it("transitions to done (noChanges) when the issue has a marker comment but no PR", async () => {
     const deps = makeDeps();
     deps.commands.prUrl = null; // draft PR は見つからない
