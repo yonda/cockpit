@@ -290,7 +290,11 @@ export async function runIssueJob(
       return;
     }
 
-    // 4. 成果検証: エージェントの自己申告を信用せず PR を確認する
+    // 4. 成果検証: エージェントの自己申告を信用せず PR を確認する。
+    // エージェントが「既に完了・PR はマージ済み」と正しく判断して終了した場合、
+    // open だけを見ると『draft PR が見つかりませんでした』の偽陰性になるため、
+    // --state all で取得し merged も成功として扱う。unmerged closed は成果と
+    // みなさず、従来どおり NO_CHANGES_MARKER の外部検証にフォールバックする。
     const { stdout } = await deps.commands.run(
       "gh",
       [
@@ -299,14 +303,17 @@ export async function runIssueJob(
         "--head",
         job.branch,
         "--state",
-        "open",
+        "all",
         "--json",
-        "url",
+        "url,state",
       ],
       { cwd: config.path, env: ghEnv },
     );
-    const prs = JSON.parse(stdout) as Array<{ url: string }>;
-    if (prs.length === 0) {
+    const prs = JSON.parse(stdout) as Array<{ url: string; state: string }>;
+    const successPr =
+      prs.find((pr) => pr.state === "OPEN") ??
+      prs.find((pr) => pr.state === "MERGED");
+    if (!successPr) {
       // PR が無くても即失敗にしない。エージェントが「差分なし完了」を宣言した
       // 可能性があるので、担当 Issue のコメントを gh api で外部検証し、
       // NO_CHANGES_MARKER 付きのエビデンスがあれば done (PR なし完了) にする。
@@ -326,7 +333,7 @@ export async function runIssueJob(
       });
       return;
     }
-    deps.store.transition(jobId, "done", { prUrl: prs[0].url });
+    deps.store.transition(jobId, "done", { prUrl: successPr.url });
   } catch (err) {
     if (signal.aborted) return;
     const message = err instanceof Error ? err.message : String(err);
