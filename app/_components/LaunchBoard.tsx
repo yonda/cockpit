@@ -7,13 +7,14 @@ import { EmptyState } from "./EmptyState";
 import { ErrorState } from "./ErrorState";
 import { JobCard } from "./JobCard";
 import { LiveIndicator } from "./useHerdrState";
+import { useInFlightAction } from "./useInFlightAction";
 import { useJobsState } from "./useJobsState";
 
 const ACTIVE = new Set(["queued", "running", "waiting_input"]);
 
 export function LaunchBoard({ issues }: { issues: LaunchIssue[] }) {
   const { result, live } = useJobsState();
-  const [firing, setFiring] = useState<number | null>(null);
+  const { busy: firing, run: runFire } = useInFlightAction<number>();
   const [fireError, setFireError] = useState<string | null>(null);
 
   const jobs = result.status === "ok" ? result.jobs : [];
@@ -21,27 +22,29 @@ export function LaunchBoard({ issues }: { issues: LaunchIssue[] }) {
     jobs.filter((j) => ACTIVE.has(j.status)).map((j) => j.issueNumber),
   );
 
-  const fire = async (issue: LaunchIssue) => {
-    if (firing !== null) return;
-    setFiring(issue.number);
-    setFireError(null);
-    try {
-      const res = await fetch("/api/jobs/fire", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          issueNumber: issue.number,
-          issueTitle: issue.title,
-        }),
-      });
-      const json = (await res.json()) as { ok: boolean; error?: string };
-      if (!json.ok) setFireError(json.error ?? `HTTP ${res.status}`);
-    } catch (err) {
-      setFireError(err instanceof Error ? err.message : "request failed");
-    } finally {
-      setFiring(null);
-    }
-  };
+  const fire = (issue: LaunchIssue) =>
+    runFire(async () => {
+      setFireError(null);
+      try {
+        const res = await fetch("/api/jobs/fire", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            issueNumber: issue.number,
+            issueTitle: issue.title,
+          }),
+        });
+        const json = (await res.json()) as { ok: boolean; error?: string };
+        if (!json.ok) {
+          setFireError(json.error ?? `HTTP ${res.status}`);
+          return false;
+        }
+        return true;
+      } catch (err) {
+        setFireError(err instanceof Error ? err.message : "request failed");
+        return false;
+      }
+    }, issue.number);
 
   return (
     <div className="flex flex-col gap-8">

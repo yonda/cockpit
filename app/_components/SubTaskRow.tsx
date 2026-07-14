@@ -5,6 +5,7 @@ import { useState } from "react";
 import type { Job } from "@/lib/jobs/types";
 import type { PbiEscalation, SubTaskRecord } from "@/lib/pbi/types";
 import { PendingInputPanel } from "./PendingInputPanel";
+import { useInFlightAction } from "./useInFlightAction";
 
 const stateBadge: Record<SubTaskRecord["state"], { label: string; cls: string }> = {
   pending: { label: "待機", cls: "text-[var(--ink-faint)] border-[var(--hairline)]" },
@@ -27,30 +28,32 @@ export function SubTaskRow({
   job: Job | undefined;
   escalations: PbiEscalation[];
 }) {
-  const [busy, setBusy] = useState(false);
+  const { isBusy: busy, run: runGuarded } = useInFlightAction();
   const [error, setError] = useState<string | null>(null);
   const badge = stateBadge[task.state];
   const hasReviewComments = escalations.some(
     (e) => e.kind === "review_comments" && e.subTaskKey === task.key,
   );
 
-  const act = async (path: string) => {
-    if (busy) return;
-    setBusy(true);
-    setError(null);
-    try {
-      const res = await fetch(
-        `/api/pbi/${pbiId}/task/${task.key}/${path}`,
-        { method: "POST" },
-      );
-      const json = (await res.json()) as { ok: boolean; error?: string };
-      if (!json.ok) setError(json.error ?? `HTTP ${res.status}`);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "request failed");
-    } finally {
-      setBusy(false);
-    }
-  };
+  const act = (path: string) =>
+    runGuarded(async () => {
+      setError(null);
+      try {
+        const res = await fetch(
+          `/api/pbi/${pbiId}/task/${task.key}/${path}`,
+          { method: "POST" },
+        );
+        const json = (await res.json()) as { ok: boolean; error?: string };
+        if (!json.ok) {
+          setError(json.error ?? `HTTP ${res.status}`);
+          return false;
+        }
+        return true;
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "request failed");
+        return false;
+      }
+    });
 
   return (
     <div className="flex flex-col gap-1 border-l-2 border-[var(--hairline)] pl-2">
