@@ -95,7 +95,6 @@ function makeDeps(fakes: Fakes, over: Partial<HerdrExecutorDeps> = {}) {
     herdr: fakes.herdr,
     transcript: fakes.transcript,
     trustWorktree: vi.fn(async () => {}),
-    settingsPath: "/disp/settings.json",
     workspaceId: "w1",
     pollIntervalMs: 1,
     sessionTimeoutMs: 100,

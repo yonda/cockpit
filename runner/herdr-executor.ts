@@ -29,7 +29,6 @@ export interface HerdrClient {
     paneId: string,
     opts: {
       cwd: string;
-      settingsPath: string;
       prompt: string;
       resumeSessionId: string | null;
       githubToken: string | null;
@@ -69,8 +68,6 @@ export type HerdrExecutorDeps = {
   transcript: TranscriptReader;
   /** worktree を事前 trust する (hasTrustDialogAccepted)。CLI の untrusted 無視を避ける。 */
   trustWorktree(cwd: string): Promise<void>;
-  /** dispatcher 管理の固定 settings (PoC で確定した sandbox/deny/hook)。 */
-  settingsPath: string;
   /** タブを作る herdr ワークスペース ID。 */
   workspaceId: string;
   /** 現在時刻 (ms)。テスト注入用。既定は Date.now。 */
@@ -151,7 +148,6 @@ export class HerdrExecutor implements AgentExecutor {
       try {
         await this.deps.herdr.startAgent(paneId, {
           cwd: opts.cwd,
-          settingsPath: this.deps.settingsPath,
           prompt: opts.prompt,
           resumeSessionId: opts.resumeSessionId,
           githubToken: opts.githubToken,

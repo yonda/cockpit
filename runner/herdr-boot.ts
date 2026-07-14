@@ -4,6 +4,7 @@ import * as path from "node:path";
 import type { AgentExecutor } from "./executor";
 import { HerdrExecutor } from "./herdr-executor";
 import { RealHerdrClient, RealTranscriptReader } from "./herdr-real";
+import { assertUnifiedProfile } from "./profile-check";
 
 // 垂直スライス (#58) の配線: 既定は SdkExecutor のまま、env でオプトインしたときだけ
 // HerdrExecutor を使う。常駐デーモンの実行系を初回スライスで丸ごと差し替えないための
@@ -12,10 +13,10 @@ import { RealHerdrClient, RealTranscriptReader } from "./herdr-real";
 //   COCKPIT_EXECUTOR=herdr           … HerdrExecutor を有効化
 //   COCKPIT_HERDR_WORKSPACE=<wsId>   … タブを作る herdr ワークスペース ID (必須)
 //
-// settings は repo 同梱の runner/herdr-runner-settings.json を、runner の
-// WorkingDirectory (= リポジトリルート、launchd 経由なら process.cwd()) 基準で解決する。
-// マルチリポジトリ化 (Task 8) で対象リポジトリごとの repoDir とは切り離した — この
-// settings は「runner プロセス自身」の設定であり、分解・実装対象のリポジトリではない。
+// 実行環境統一 (#85): settings は注入しない。spawn された claude は人間と同じ
+// ユーザー settings (~/.claude/settings.json) を継承する。代わりに、無人実行の
+// 安全性が依存する不変条件 (層3 deny・sandbox 有効等) を起動時に検証し、
+// 満たさなければ fail-closed で起動を拒否する (runner/profile-check.ts)。
 
 export function buildHerdrExecutorFromEnv(): AgentExecutor | null {
   if (process.env.COCKPIT_EXECUTOR !== "herdr") return null;
@@ -25,15 +26,11 @@ export function buildHerdrExecutorFromEnv(): AgentExecutor | null {
       "COCKPIT_EXECUTOR=herdr には COCKPIT_HERDR_WORKSPACE (herdr ワークスペース ID) が必要です",
     );
   }
-  const settingsPath = path.join(process.cwd(), "runner", "herdr-runner-settings.json");
-  if (!fs.existsSync(settingsPath)) {
-    throw new Error(`dispatcher settings が見つかりません: ${settingsPath}`);
-  }
+  assertUnifiedProfile();
   return new HerdrExecutor({
     herdr: new RealHerdrClient(),
     transcript: new RealTranscriptReader(),
     trustWorktree,
-    settingsPath,
     workspaceId,
   });
 }
