@@ -49,6 +49,7 @@ export function PbiCard({ pbi, jobsById }: { pbi: PbiJob; jobsById: Map<string, 
     <div className={`flex flex-col gap-2 border px-3 py-2.5 ${terminal ? "border-[var(--hairline)] opacity-70" : "border-[var(--hairline-strong)]"} bg-[var(--background)]`}>
       <div className="flex items-center justify-between gap-2">
         <div className="flex min-w-0 items-center gap-2">
+          <span className="shrink-0 font-mono text-[11px] text-[var(--ink-faint)]" title={pbi.repo}>{pbi.repo}</span>
           <span className="font-mono text-[11px] text-[var(--ink-muted)]">#{pbi.issueNumber}</span>
           <span className="truncate text-[13px] font-semibold text-[var(--ink)]">{pbi.title}</span>
         </div>
