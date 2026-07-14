@@ -2,10 +2,10 @@
 import { dispatchReady, type PbiExecutorDeps } from "./pbi-executor";
 import type { PbiStore } from "./pbi-store";
 
-export function reconcileOnBoot(deps: {
+export async function reconcileOnBoot(deps: {
   pbiStore: PbiStore;
   exec: PbiExecutorDeps;
-}): void {
+}): Promise<void> {
   for (const pbi of deps.pbiStore.list()) {
     if (pbi.status !== "executing") continue;
     for (const task of pbi.subTasks) {
@@ -35,6 +35,6 @@ export function reconcileOnBoot(deps: {
       }
       // job が queued/running/waiting_input で生存中 → 何もしない（running のまま）
     }
-    dispatchReady(deps.exec, pbi.id);
+    await dispatchReady(deps.exec, pbi.id);
   }
 }

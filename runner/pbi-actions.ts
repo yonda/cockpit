@@ -15,28 +15,30 @@ function clearEscalationsFor(
   }
 }
 
-export function retryTask(
+export async function retryTask(
   deps: PbiExecutorDeps,
   pbiId: string,
   key: string,
-): void {
-  deps.pbiStore.transitionSubTask(pbiId, key, "pending", { jobId: null });
+): Promise<void> {
+  // jobId は null にせず残す。failed が誤判定（前ジョブがまだ稼働中）だった場合に
+  // dispatchReady の発射前ガードが前ジョブの生存を確認して二重発射を防げるようにする。
+  deps.pbiStore.transitionSubTask(pbiId, key, "pending");
   clearEscalationsFor(deps.pbiStore, pbiId, key);
-  dispatchReady(deps, pbiId);
+  await dispatchReady(deps, pbiId);
 }
 
-export function skipTask(
+export async function skipTask(
   deps: PbiExecutorDeps,
   pbiId: string,
   key: string,
-): void {
+): Promise<void> {
   deps.pbiStore.transitionSubTask(pbiId, key, "skipped");
   clearEscalationsFor(deps.pbiStore, pbiId, key);
   const pbi = deps.pbiStore.get(pbiId)!;
   if (pbi.status === "executing" && isPbiComplete(pbi.subTasks)) {
     deps.pbiStore.transition(pbiId, "completed");
   } else {
-    dispatchReady(deps, pbiId);
+    await dispatchReady(deps, pbiId);
   }
 }
 
@@ -44,9 +46,12 @@ export function pausePbi(store: PbiStore, pbiId: string): void {
   store.update(pbiId, { paused: true });
 }
 
-export function resumePbi(deps: PbiExecutorDeps, pbiId: string): void {
+export async function resumePbi(
+  deps: PbiExecutorDeps,
+  pbiId: string,
+): Promise<void> {
   deps.pbiStore.update(pbiId, { paused: false });
-  dispatchReady(deps, pbiId);
+  await dispatchReady(deps, pbiId);
 }
 
 export function cancelPbi(deps: PbiExecutorDeps, pbiId: string): void {
