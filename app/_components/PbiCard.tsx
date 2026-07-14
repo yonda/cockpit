@@ -5,6 +5,7 @@ import { useState } from "react";
 import type { Job } from "@/lib/jobs/types";
 import type { PbiJob } from "@/lib/pbi/types";
 import { SubTaskRow } from "./SubTaskRow";
+import { useInFlightAction } from "./useInFlightAction";
 
 const statusLabel: Record<PbiJob["status"], string> = {
   decomposing: "分解中",
@@ -30,17 +31,17 @@ async function postAction(path: string, body?: unknown): Promise<string | null> 
 }
 
 export function PbiCard({ pbi, jobsById }: { pbi: PbiJob; jobsById: Map<string, Job> }) {
-  const [busy, setBusy] = useState(false);
+  const { isBusy: busy, run: runGuarded } = useInFlightAction();
   const [error, setError] = useState<string | null>(null);
   const [feedback, setFeedback] = useState("");
 
-  const run = async (path: string, body?: unknown) => {
-    if (busy) return;
-    setBusy(true);
-    setError(null);
-    setError(await postAction(path, body));
-    setBusy(false);
-  };
+  const run = (path: string, body?: unknown) =>
+    runGuarded(async () => {
+      setError(null);
+      const err = await postAction(path, body);
+      setError(err);
+      return err === null;
+    });
 
   const mergedCount = pbi.subTasks.filter((t) => ["merged", "done_no_pr", "skipped"].includes(t.state)).length;
   const terminal = ["completed", "failed", "cancelled"].includes(pbi.status);

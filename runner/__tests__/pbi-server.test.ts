@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { AgentExecutor, ExecutorHooks, ExecutorRunOpts } from "../executor";
 import type { GitHubClient, PrState } from "../github";
-import type { SubTask } from "../../lib/pbi/types";
+import type { SubTask, SubTaskRecord } from "../../lib/pbi/types";
 import { InputBroker } from "../input-broker";
 import { JobStore } from "../store";
 import { PbiStore } from "../pbi-store";
@@ -93,7 +93,7 @@ beforeEach(() => {
         return { cwd, githubToken: "tok-acme", cleanup: async () => {} };
       },
     },
-    exec: { pbiStore, jobStore, scheduler },
+    exec: { pbiStore, jobStore, scheduler, github },
   };
 });
 afterEach(() => {
@@ -307,6 +307,72 @@ describe("handlePbiRequest", () => {
       deps,
     );
     expect(res.error?.message).toMatch(/承認できる状態ではありません \(unknown\)/);
+  });
+
+  const failedSubTask = (over: Partial<SubTaskRecord> = {}): SubTaskRecord => ({
+    key: "t1",
+    title: "types",
+    goal: "g",
+    deliverable: "d",
+    acceptanceCriteria: ["ok"],
+    dependsOn: [],
+    state: "failed",
+    issueNumber: 100,
+    jobId: null,
+    branch: "feature/100-t1",
+    prUrl: null,
+    ...over,
+  });
+
+  const executingPbiWith = (task: SubTaskRecord): string => {
+    const pbi = deps.pbiStore.create({ repo: "r", issueNumber: 42, title: "P" });
+    deps.pbiStore.transition(pbi.id, "awaiting_approval");
+    deps.pbiStore.transition(pbi.id, "executing");
+    deps.pbiStore.setSubTasks(pbi.id, [task]);
+    return pbi.id;
+  };
+
+  it("pbi.markTaskDone moves a failed sub-task to done_no_pr when no merged PR exists", async () => {
+    const pbiId = executingPbiWith(failedSubTask());
+
+    const res = await handlePbiRequest(
+      { id: "1", method: "pbi.markTaskDone", params: { pbiId, key: "t1" } },
+      deps,
+    );
+
+    expect(res.error).toBeUndefined();
+    const after = deps.pbiStore.get(pbiId)!;
+    expect(after.subTasks[0].state).toBe("done_no_pr");
+    expect(after.status).toBe("completed");
+  });
+
+  it("pbi.markTaskDone moves a failed sub-task to merged when the branch PR is merged", async () => {
+    github.prStateForBranch = async () => ({
+      kind: "merged",
+      url: "https://pr/9",
+    });
+    const pbiId = executingPbiWith(failedSubTask());
+
+    await handlePbiRequest(
+      { id: "1", method: "pbi.markTaskDone", params: { pbiId, key: "t1" } },
+      deps,
+    );
+
+    const after = deps.pbiStore.get(pbiId)!;
+    expect(after.subTasks[0].state).toBe("merged");
+    expect(after.subTasks[0].prUrl).toBe("https://pr/9");
+  });
+
+  it("pbi.markTaskDone on a non-failed sub-task rejects (canSubTaskTransition), which server.ts returns as a socket error", async () => {
+    const pbiId = executingPbiWith(failedSubTask({ state: "in_review" }));
+
+    await expect(
+      handlePbiRequest(
+        { id: "1", method: "pbi.markTaskDone", params: { pbiId, key: "t1" } },
+        deps,
+      ),
+    ).rejects.toThrow(/invalid sub-task transition/);
+    expect(deps.pbiStore.get(pbiId)!.subTasks[0].state).toBe("in_review");
   });
 
   it("pbi.pause on an unknown pbiId rejects the handlePbiRequest promise (synchronous PbiStore.mustGet throw propagates through the async fn)", async () => {

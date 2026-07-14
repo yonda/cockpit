@@ -50,6 +50,9 @@ describe("canSubTaskTransition", () => {
     expect(canSubTaskTransition("failed", "in_review")).toBe(true);
     expect(canSubTaskTransition("failed", "merged")).toBe(true);
   });
+  it("allows failed -> done_no_pr for human markTaskDone recovery", () => {
+    expect(canSubTaskTransition("failed", "done_no_pr")).toBe(true);
+  });
   it("allows pending -> in_review / merged (発射前ガードの PR 実態への整合)", () => {
     expect(canSubTaskTransition("pending", "in_review")).toBe(true);
     expect(canSubTaskTransition("pending", "merged")).toBe(true);
