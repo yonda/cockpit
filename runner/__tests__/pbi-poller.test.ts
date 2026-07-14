@@ -130,6 +130,7 @@ describe("pollOnce", () => {
       kind: "open",
       url: "https://github.com/yonda/cockpit/pull/9",
       reviewCommentCount: 2,
+      latestReviewCommentAt: null,
     };
 
     await pollOnce({ pbiStore, github, exec });
@@ -185,6 +186,7 @@ describe("pollOnce", () => {
       kind: "open",
       url: "https://github.com/yonda/cockpit/pull/9",
       reviewCommentCount: 0,
+      latestReviewCommentAt: null,
     };
 
     await pollOnce({ pbiStore, github, exec });

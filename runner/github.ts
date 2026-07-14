@@ -4,7 +4,17 @@ import type { AssignedIssue } from "../lib/repos/types";
 
 export type PrState =
   | { kind: "none" }
-  | { kind: "open"; url: string; reviewCommentCount: number }
+  | {
+      kind: "open";
+      url: string;
+      reviewCommentCount: number;
+      /**
+       * OPEN な PR の「最新レビューコメント」の識別子 (createdAt / ISO 8601)。
+       * 件数だけでは新旧を判別できないため、無限ループ防止マーカー判定の材料として公開する。
+       * コメントが無い / 取得失敗時は null。
+       */
+      latestReviewCommentAt: string | null;
+    }
   | { kind: "merged"; url: string }
   | { kind: "closed"; url: string };
 
@@ -182,6 +192,7 @@ export class RealGitHubClient implements GitHubClient {
       kind: "open",
       url: pr.url,
       reviewCommentCount: await this.reviewThreadCount(repo, pr.number),
+      latestReviewCommentAt: await this.latestReviewCommentAt(repo, pr.number),
     };
   }
 
@@ -207,6 +218,50 @@ export class RealGitHubClient implements GitHubClient {
       );
     } catch {
       return 0;
+    }
+  }
+
+  /**
+   * OPEN な PR の「最新レビューコメント」の createdAt を GraphQL で取得する。
+   * reviewThreadCount と同じ GraphQL 経路 (reviewThreads) を辿り、各スレッド末尾
+   * コメントの createdAt を集めて最大値 (= 最新) を返す。ISO 8601 (UTC/末尾 Z)
+   * なので辞書順比較で新旧を判別できる。コメントが無い / 取得失敗時は null。
+   */
+  private async latestReviewCommentAt(
+    repo: string,
+    number: number,
+  ): Promise<string | null> {
+    const [owner, name] = repo.split("/");
+    try {
+      const { stdout } = await this.gh(repo, [
+        "api",
+        "graphql",
+        "-f",
+        `query=query{repository(owner:"${owner}",name:"${name}"){pullRequest(number:${number}){reviewThreads(first:100){nodes{comments(last:1){nodes{createdAt}}}}}}}`,
+      ]);
+      const parsed = JSON.parse(stdout) as {
+        data?: {
+          repository?: {
+            pullRequest?: {
+              reviewThreads?: {
+                nodes?: Array<{
+                  comments?: { nodes?: Array<{ createdAt?: string }> };
+                }>;
+              };
+            };
+          };
+        };
+      };
+      const nodes =
+        parsed.data?.repository?.pullRequest?.reviewThreads?.nodes ?? [];
+      const timestamps = nodes
+        .flatMap((thread) => thread.comments?.nodes ?? [])
+        .map((comment) => comment.createdAt)
+        .filter((at): at is string => typeof at === "string");
+      if (timestamps.length === 0) return null;
+      return timestamps.reduce((latest, at) => (at > latest ? at : latest));
+    } catch {
+      return null;
     }
   }
 }

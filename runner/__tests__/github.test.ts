@@ -161,7 +161,7 @@ describe("RealGitHubClient.prStateForBranch", () => {
     expect(commands.calls).toHaveLength(1);
   });
 
-  it("maps an open PR, fetching review-thread count via graphql", async () => {
+  it("maps an open PR, fetching review-thread count and latest comment via graphql", async () => {
     const commands = new FakeCommands();
     commands.responses.push({
       stdout: JSON.stringify([
@@ -176,14 +176,92 @@ describe("RealGitHubClient.prStateForBranch", () => {
       }),
       stderr: "",
     });
+    // 3 回目の呼び出し: gh api graphql で最新レビューコメントの createdAt
+    commands.responses.push({
+      stdout: JSON.stringify({
+        data: {
+          repository: {
+            pullRequest: {
+              reviewThreads: {
+                nodes: [
+                  { comments: { nodes: [{ createdAt: "2026-07-14T09:00:00Z" }] } },
+                  { comments: { nodes: [{ createdAt: "2026-07-14T10:00:00Z" }] } },
+                ],
+              },
+            },
+          },
+        },
+      }),
+      stderr: "",
+    });
     expect(await gh(commands).prStateForBranch("r", "feature/1-x")).toEqual({
       kind: "open",
       url: "https://github.com/yonda/cockpit/pull/9",
       reviewCommentCount: 3,
+      // 複数スレッドの末尾コメントから最大 (= 最新) の createdAt を選ぶ
+      latestReviewCommentAt: "2026-07-14T10:00:00Z",
     });
     // OPEN のみ graphql を叩く
     expect(commands.calls[1].args).toContain("graphql");
     expect(commands.calls[1].args.join(" ")).toContain("reviewThreads");
+    // 最新コメント取得も graphql 経路で comments の createdAt を辿る
+    expect(commands.calls[2].args).toContain("graphql");
+    expect(commands.calls[2].args.join(" ")).toContain("createdAt");
+  });
+
+  it("falls back to null latestReviewCommentAt when there are no review comments", async () => {
+    const commands = new FakeCommands();
+    commands.responses.push({
+      stdout: JSON.stringify([
+        { url: "https://github.com/yonda/cockpit/pull/9", state: "OPEN", number: 9 },
+      ]),
+      stderr: "",
+    });
+    // reviewThreads.totalCount
+    commands.responses.push({
+      stdout: JSON.stringify({
+        data: { repository: { pullRequest: { reviewThreads: { totalCount: 0 } } } },
+      }),
+      stderr: "",
+    });
+    // 最新コメント: スレッドが空
+    commands.responses.push({
+      stdout: JSON.stringify({
+        data: { repository: { pullRequest: { reviewThreads: { nodes: [] } } } },
+      }),
+      stderr: "",
+    });
+    expect(await gh(commands).prStateForBranch("r", "feature/1-x")).toEqual({
+      kind: "open",
+      url: "https://github.com/yonda/cockpit/pull/9",
+      reviewCommentCount: 0,
+      latestReviewCommentAt: null,
+    });
+  });
+
+  it("falls back to null latestReviewCommentAt when the graphql call fails", async () => {
+    const commands = new FakeCommands();
+    commands.responses.push({
+      stdout: JSON.stringify([
+        { url: "https://github.com/yonda/cockpit/pull/9", state: "OPEN", number: 9 },
+      ]),
+      stderr: "",
+    });
+    // reviewThreads.totalCount
+    commands.responses.push({
+      stdout: JSON.stringify({
+        data: { repository: { pullRequest: { reviewThreads: { totalCount: 2 } } } },
+      }),
+      stderr: "",
+    });
+    // 最新コメント: パース不能な出力 → JSON.parse が throw → null にフォールバック
+    commands.responses.push({ stdout: "not json", stderr: "" });
+    expect(await gh(commands).prStateForBranch("r", "feature/1-x")).toEqual({
+      kind: "open",
+      url: "https://github.com/yonda/cockpit/pull/9",
+      reviewCommentCount: 2,
+      latestReviewCommentAt: null,
+    });
   });
 
   it("maps a closed PR", async () => {
