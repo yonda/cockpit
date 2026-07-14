@@ -7,6 +7,7 @@ import type {
   RunnerResponse,
 } from "@/lib/jobs/types";
 import type { PbiRunnerEvent, PbiRunnerRequest } from "@/lib/pbi/types";
+import type { ReposRunnerRequest } from "@/lib/repos/types";
 
 const REQUEST_TIMEOUT_MS = 5_000;
 const RECONNECT_DELAY_MS = 1_000;
@@ -19,7 +20,10 @@ function getSocketPath(): string {
 }
 
 export async function callRunner<T>(
-  method: RunnerRequest["method"] | PbiRunnerRequest["method"],
+  method:
+    | RunnerRequest["method"]
+    | PbiRunnerRequest["method"]
+    | ReposRunnerRequest["method"],
   params: unknown,
 ): Promise<T> {
   const socketPath = getSocketPath();

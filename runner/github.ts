@@ -1,5 +1,6 @@
 import type { CommandRunner } from "./exec";
 import { SUBTASK_MARKER, type SubTask } from "../lib/pbi/types";
+import type { AssignedIssue } from "../lib/repos/types";
 
 export type PrState =
   | { kind: "none" }
@@ -7,14 +8,8 @@ export type PrState =
   | { kind: "merged"; url: string }
   | { kind: "closed"; url: string };
 
-export type AssignedIssue = {
-  repo: string;
-  issueNumber: number;
-  title: string;
-  url: string;
-  createdAt: string;
-  labels: string[];
-};
+// AssignedIssue はソケットプロトコルの一部なので lib 側で定義し、ここから再輸出する。
+export type { AssignedIssue } from "../lib/repos/types";
 
 export interface GitHubClient {
   fetchIssue(repo: string, number: number): Promise<{ title: string; body: string }>;
