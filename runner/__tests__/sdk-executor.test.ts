@@ -201,6 +201,9 @@ describe("SdkExecutor.run が query の options を配線する", () => {
       prompt: "実装してください",
       resumeSessionId: null,
       githubToken: null,
+      repo: "yonda/cockpit",
+      issueNumber: 1,
+      issueTitle: "実装してください",
       signal: new AbortController().signal,
     };
   }

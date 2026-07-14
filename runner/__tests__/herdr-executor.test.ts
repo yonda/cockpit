@@ -31,6 +31,9 @@ function makeOpts(overrides: Partial<ExecutorRunOpts> = {}): ExecutorRunOpts {
     prompt: "implement issue #1",
     resumeSessionId: null,
     githubToken: null,
+    repo: "yonda/cockpit",
+    issueNumber: 1,
+    issueTitle: "implement issue #1",
     signal: new AbortController().signal,
     ...overrides,
   };

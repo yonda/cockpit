@@ -253,6 +253,9 @@ export async function runIssueJob(
         prompt,
         resumeSessionId: isResume ? job.sessionId : null,
         githubToken,
+        repo: job.repo,
+        issueNumber: job.issueNumber,
+        issueTitle: job.issueTitle,
         signal,
       },
       {

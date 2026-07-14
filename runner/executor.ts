@@ -7,6 +7,11 @@ export type ExecutorRunOpts = {
   prompt: string;
   resumeSessionId: string | null;
   githubToken: string | null; // 対象リポジトリ owner のトークン (herdr ペイン等へ供給)
+  // ワークスペース label 組み立て用の issue メタデータ (HerdrExecutor が使用)。
+  // SdkExecutor はこれらを無視して従来通り動作する。
+  repo: string; // "yonda/cockpit"
+  issueNumber: number;
+  issueTitle: string;
   signal: AbortSignal;
 };
 

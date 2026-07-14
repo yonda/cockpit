@@ -83,6 +83,9 @@ export async function runDecomposition(
         prompt: buildDecomposePrompt(args),
         resumeSessionId: null,
         githubToken,
+        repo: args.repo,
+        issueNumber: args.issueNumber,
+        issueTitle: args.title,
         signal: args.signal,
       },
       {
