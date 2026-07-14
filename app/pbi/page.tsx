@@ -2,15 +2,26 @@ import { HintTooltip } from "@/app/_components/HintTooltip";
 import { PbiBoard } from "@/app/_components/PbiBoard";
 import { SectionBoundary } from "@/app/_components/SectionBoundary";
 import { SectionErrorState } from "@/app/_components/ErrorState";
-import { fetchPbiIssues, type LaunchIssue } from "@/lib/github/issues";
+import type {
+  AssignedIssue,
+  AssignedIssuesOwnerError,
+  AssignedIssuesResult,
+} from "@/lib/repos/types";
+import { callRunner } from "@/lib/runner/client";
 
 export const dynamic = "force-dynamic";
 
 export default async function PbiPage() {
-  let issues: LaunchIssue[] = [];
+  let issues: AssignedIssue[] = [];
+  let ownerErrors: AssignedIssuesOwnerError[] = [];
   let issueError: unknown = null;
   try {
-    issues = await fetchPbiIssues();
+    const result = await callRunner<AssignedIssuesResult>(
+      "repos.assignedIssues",
+      {},
+    );
+    issues = result.issues;
+    ownerErrors = result.errors;
   } catch (err) {
     issueError = err;
   }
@@ -28,6 +39,12 @@ export default async function PbiPage() {
         <div className="h-px w-full bg-gradient-to-r from-[var(--accent)]/50 via-[var(--hairline-strong)] to-transparent" />
         <SectionBoundary title="pbi">
           {issueError ? <SectionErrorState error={issueError} /> : null}
+          {ownerErrors.length > 0 ? (
+            <div className="font-mono text-[11px] text-[var(--signal-alert)]">
+              一部の owner の issue 取得に失敗:{" "}
+              {ownerErrors.map((e) => `${e.owner} (${e.message})`).join(" / ")}
+            </div>
+          ) : null}
           <PbiBoard issues={issues} />
         </SectionBoundary>
       </main>

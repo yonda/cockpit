@@ -59,39 +59,3 @@ export async function fetchOpenIssues(): Promise<LaunchIssue[]> {
     labels: n.labels.nodes,
   }));
 }
-
-const PBI_QUERY = /* GraphQL */ `
-  query PbiIssues($owner: String!, $name: String!) {
-    repository(owner: $owner, name: $name) {
-      issues(
-        states: OPEN
-        first: 50
-        filterBy: { labels: ["pbi"] }
-        orderBy: { field: CREATED_AT, direction: DESC }
-      ) {
-        nodes {
-          number
-          title
-          url
-          createdAt
-          labels(first: 10) { nodes { name color } }
-        }
-      }
-    }
-  }
-`;
-
-export async function fetchPbiIssues(): Promise<LaunchIssue[]> {
-  const [owner, name] = LAUNCH_REPO.split("/");
-  const data = await graphql<IssuesQuery>(PBI_QUERY, {
-    variables: { owner, name },
-    tags: ["pbi-issues"],
-  });
-  return (data.repository?.issues.nodes ?? []).map((n) => ({
-    number: n.number,
-    title: n.title,
-    url: n.url,
-    createdAt: n.createdAt,
-    labels: n.labels.nodes,
-  }));
-}
