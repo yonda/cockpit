@@ -6,11 +6,23 @@ import {
   NO_CHANGES_MARKER,
   SUBTASK_MARKER,
 } from "../../lib/pbi/types";
+import type { PbiEscalationKind } from "../../lib/pbi/types";
 
 describe("markers", () => {
   it("exports distinct html-comment markers", () => {
     expect(NO_CHANGES_MARKER).toBe("<!-- cockpit:no-changes -->");
     expect(NO_CHANGES_MARKER).not.toBe(SUBTASK_MARKER);
+  });
+});
+
+describe("PbiEscalationKind", () => {
+  it("includes conflict as an independent kind (not merged into review_comments)", () => {
+    // conflict は review_comments とは別種別。対応アクションが異なるため
+    // 統合せず独立して扱えることを型レベルで固定する回帰確認。
+    const conflict: PbiEscalationKind = "conflict";
+    const reviewComments: PbiEscalationKind = "review_comments";
+    expect(conflict).toBe("conflict");
+    expect(conflict).not.toBe(reviewComments);
   });
 });
 

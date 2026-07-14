@@ -123,7 +123,10 @@ export type PbiEscalationKind =
   | "decomposition_approval"
   | "task_failed"
   | "pr_closed_unmerged"
-  | "review_comments";
+  | "review_comments"
+  // コンフリクトのエスカレーション。対応アクション（rebase/解消）が
+  // review_comments とは異なるため統合せず独立させる。
+  | "conflict";
 
 export type PbiEscalation = {
   id: string;
