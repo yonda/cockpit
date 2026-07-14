@@ -8,6 +8,7 @@ import { EmptyState } from "./EmptyState";
 import { ErrorState } from "./ErrorState";
 import { LiveIndicator } from "./useHerdrState";
 import { PbiCard } from "./PbiCard";
+import { useInFlightAction } from "./useInFlightAction";
 import { usePbiState } from "./usePbiState";
 
 const OPEN = new Set(["decomposing", "awaiting_approval", "executing"]);
@@ -18,7 +19,7 @@ const issueKey = (repo: string, issueNumber: number) => `${repo}#${issueNumber}`
 
 export function PbiBoard({ issues }: { issues: AssignedIssue[] }) {
   const { result, jobsById, live } = usePbiState();
-  const [firing, setFiring] = useState<string | null>(null);
+  const { busy: firing, run: runFire } = useInFlightAction<string>();
   const [fireError, setFireError] = useState<string | null>(null);
   const [segment, setSegment] = useState<Segment>("active");
 
@@ -28,28 +29,30 @@ export function PbiBoard({ issues }: { issues: AssignedIssue[] }) {
   const visiblePbis = segment === "all" ? pbis : segment === "active" ? activePbis : donePbis;
   const activeIssues = new Set(activePbis.map((p) => issueKey(p.repo, p.issueNumber)));
 
-  const fire = async (issue: AssignedIssue) => {
-    if (firing !== null) return;
-    setFiring(issueKey(issue.repo, issue.issueNumber));
-    setFireError(null);
-    try {
-      const res = await fetch("/api/pbi/fire", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          repo: issue.repo,
-          issueNumber: issue.issueNumber,
-          title: issue.title,
-        }),
-      });
-      const json = (await res.json()) as { ok: boolean; error?: string };
-      if (!json.ok) setFireError(json.error ?? `HTTP ${res.status}`);
-    } catch (err) {
-      setFireError(err instanceof Error ? err.message : "request failed");
-    } finally {
-      setFiring(null);
-    }
-  };
+  const fire = (issue: AssignedIssue) =>
+    runFire(async () => {
+      setFireError(null);
+      try {
+        const res = await fetch("/api/pbi/fire", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            repo: issue.repo,
+            issueNumber: issue.issueNumber,
+            title: issue.title,
+          }),
+        });
+        const json = (await res.json()) as { ok: boolean; error?: string };
+        if (!json.ok) {
+          setFireError(json.error ?? `HTTP ${res.status}`);
+          return false;
+        }
+        return true;
+      } catch (err) {
+        setFireError(err instanceof Error ? err.message : "request failed");
+        return false;
+      }
+    }, issueKey(issue.repo, issue.issueNumber));
 
   return (
     <div className="flex flex-col gap-8">
