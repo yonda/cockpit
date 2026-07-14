@@ -555,6 +555,76 @@ describe("runIssueJob", () => {
     expect(store.get(job2.id)!.status).toBe("done");
   });
 
+  it("parallel jobs on different repos fetch concurrently (serialization is per repoDir)", async () => {
+    // 両方の fetch が同時に走るまで互いに待つバリア。repoDir 以外のキーで
+    // 誤って全体直列化される退行が起きると、2 本目の fetch が開始されず
+    // バリアが解除されないためテストがタイムアウトする (= 並行性を検証)。
+    class FetchBarrierCommands extends FakeCommands {
+      activeFetches = 0;
+      maxActiveFetches = 0;
+      fetchCount = 0;
+      private waiters: (() => void)[] = [];
+
+      async run(
+        cmd: string,
+        args: string[],
+        opts: { cwd: string; env?: Record<string, string> },
+      ) {
+        if (cmd === "git" && args[0] === "fetch") {
+          this.fetchCount++;
+          this.activeFetches++;
+          this.maxActiveFetches = Math.max(
+            this.maxActiveFetches,
+            this.activeFetches,
+          );
+          if (this.fetchCount >= 2) {
+            for (const w of this.waiters) w();
+          } else {
+            await new Promise<void>((r) => this.waiters.push(r));
+          }
+          this.activeFetches--;
+        }
+        return super.run(cmd, args, opts);
+      }
+    }
+
+    const otherRepoConfig: RepoConfig = {
+      repo: "yonda/other-repo",
+      path: "/tmp/other-repo",
+      baseBranch: "main",
+      tokenOwner: "yonda",
+    };
+    const commands = new FetchBarrierCommands();
+    const deps = makeDeps({
+      commands,
+      registry: makeRegistry([DEFAULT_REPO_CONFIG, otherRepoConfig]),
+    });
+
+    const job1 = store.create({
+      repo: "yonda/cockpit",
+      issueNumber: 1,
+      issueTitle: "task one",
+      branch: "feature/1-task-one",
+    });
+    const job2 = store.create({
+      repo: "yonda/other-repo",
+      issueNumber: 2,
+      issueTitle: "task two",
+      branch: "feature/2-task-two",
+    });
+
+    await Promise.all([
+      runIssueJob(deps, job1.id, new AbortController().signal),
+      runIssueJob(deps, job2.id, new AbortController().signal),
+    ]);
+
+    // 別 repoDir の fetch は互いにブロックせず、実行区間が重なる
+    expect(commands.fetchCount).toBe(2);
+    expect(commands.maxActiveFetches).toBe(2);
+    expect(store.get(job1.id)!.status).toBe("done");
+    expect(store.get(job2.id)!.status).toBe("done");
+  });
+
   it("uses a review-reply prompt when the job kind is review_reply", async () => {
     const deps = makeDeps();
     const job = store.create({
