@@ -89,7 +89,7 @@ export async function pollOnce(deps: PollDeps): Promise<void> {
       if (fresh.status === "executing" && isPbiComplete(fresh.subTasks)) {
         deps.pbiStore.transition(pbi.id, "completed");
       } else if (fresh.status === "executing") {
-        dispatchReady(deps.exec, pbi.id);
+        await dispatchReady(deps.exec, pbi.id);
       }
     } catch (err) {
       // 1 PBI のポーリング失敗（gh API エラー等）で他の PBI の処理を止めない

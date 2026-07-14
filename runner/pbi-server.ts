@@ -93,15 +93,15 @@ export async function handlePbiRequest(
       return { result: {} };
 
     case "pbi.resume":
-      resumePbi(deps.exec, request.params.pbiId);
+      await resumePbi(deps.exec, request.params.pbiId);
       return { result: {} };
 
     case "pbi.retryTask":
-      retryTask(deps.exec, request.params.pbiId, request.params.key);
+      await retryTask(deps.exec, request.params.pbiId, request.params.key);
       return { result: {} };
 
     case "pbi.skipTask":
-      skipTask(deps.exec, request.params.pbiId, request.params.key);
+      await skipTask(deps.exec, request.params.pbiId, request.params.key);
       return { result: {} };
 
     case "pbi.cancel":
