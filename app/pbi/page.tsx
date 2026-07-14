@@ -1,31 +1,10 @@
 import { HintTooltip } from "@/app/_components/HintTooltip";
 import { PbiBoard } from "@/app/_components/PbiBoard";
 import { SectionBoundary } from "@/app/_components/SectionBoundary";
-import { SectionErrorState } from "@/app/_components/ErrorState";
-import type {
-  AssignedIssue,
-  AssignedIssuesOwnerError,
-  AssignedIssuesResult,
-} from "@/lib/repos/types";
-import { callRunner } from "@/lib/runner/client";
 
 export const dynamic = "force-dynamic";
 
-export default async function PbiPage() {
-  let issues: AssignedIssue[] = [];
-  let ownerErrors: AssignedIssuesOwnerError[] = [];
-  let issueError: unknown = null;
-  try {
-    const result = await callRunner<AssignedIssuesResult>(
-      "repos.assignedIssues",
-      {},
-    );
-    issues = result.issues;
-    ownerErrors = result.errors;
-  } catch (err) {
-    issueError = err;
-  }
-
+export default function PbiPage() {
   return (
     <div className="flex-1">
       <main className="mx-auto flex max-w-7xl flex-col gap-6 px-8 pt-10 pb-24">
@@ -34,18 +13,11 @@ export default async function PbiPage() {
           <h1 className="font-mono text-[18px] font-bold uppercase tracking-[0.14em] text-[var(--accent)]">
             PBI
           </h1>
-          <HintTooltip hint="PBI を発射 · エージェントが分解 · 承認したら sub-task を自走実装 · PR をレビュー&マージで次へ" />
+          <HintTooltip hint="発射済み PBI の状態 · sub-task を自走実装 · PR をレビュー&マージで次へ · 発射は Launch タブから" />
         </div>
         <div className="h-px w-full bg-gradient-to-r from-[var(--accent)]/50 via-[var(--hairline-strong)] to-transparent" />
         <SectionBoundary title="pbi">
-          {issueError ? <SectionErrorState error={issueError} /> : null}
-          {ownerErrors.length > 0 ? (
-            <div className="font-mono text-[11px] text-[var(--signal-alert)]">
-              一部の owner の issue 取得に失敗:{" "}
-              {ownerErrors.map((e) => `${e.owner} (${e.message})`).join(" / ")}
-            </div>
-          ) : null}
-          <PbiBoard issues={issues} />
+          <PbiBoard />
         </SectionBoundary>
       </main>
     </div>

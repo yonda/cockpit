@@ -1,16 +1,27 @@
 import { HintTooltip } from "@/app/_components/HintTooltip";
-import { LaunchBoard } from "@/app/_components/LaunchBoard";
+import { PbiLaunchBoard } from "@/app/_components/PbiLaunchBoard";
 import { SectionBoundary } from "@/app/_components/SectionBoundary";
 import { SectionErrorState } from "@/app/_components/ErrorState";
-import { fetchOpenIssues, type LaunchIssue } from "@/lib/github/issues";
+import type {
+  AssignedIssue,
+  AssignedIssuesOwnerError,
+  AssignedIssuesResult,
+} from "@/lib/repos/types";
+import { callRunner } from "@/lib/runner/client";
 
 export const dynamic = "force-dynamic";
 
 export default async function LaunchPage() {
-  let issues: LaunchIssue[] = [];
+  let issues: AssignedIssue[] = [];
+  let ownerErrors: AssignedIssuesOwnerError[] = [];
   let issueError: unknown = null;
   try {
-    issues = await fetchOpenIssues();
+    const result = await callRunner<AssignedIssuesResult>(
+      "repos.assignedIssues",
+      {},
+    );
+    issues = result.issues;
+    ownerErrors = result.errors;
   } catch (err) {
     issueError = err;
   }
@@ -24,7 +35,7 @@ export default async function LaunchPage() {
             <h1 className="font-mono text-[18px] font-bold uppercase tracking-[0.14em] text-[var(--accent)]">
               Launch Pad
             </h1>
-            <HintTooltip hint="⚡ fire an issue · headless agent implements it in a worktree · answer permissions here · result lands as a draft PR" />
+            <HintTooltip hint="⚡ 候補 issue を PBI として発射 · エージェントが分解 · 承認したら sub-task を自走実装 · 状態は PBI タブで確認" />
           </div>
         </div>
 
@@ -32,7 +43,13 @@ export default async function LaunchPage() {
 
         <SectionBoundary title="launch pad">
           {issueError ? <SectionErrorState error={issueError} /> : null}
-          <LaunchBoard issues={issues} />
+          {ownerErrors.length > 0 ? (
+            <div className="font-mono text-[11px] text-[var(--signal-alert)]">
+              一部の owner の issue 取得に失敗:{" "}
+              {ownerErrors.map((e) => `${e.owner} (${e.message})`).join(" / ")}
+            </div>
+          ) : null}
+          <PbiLaunchBoard issues={issues} />
         </SectionBoundary>
       </main>
     </div>

@@ -29,6 +29,17 @@ export type PbiStatus =
   | "failed"
   | "cancelled";
 
+/** 「進行中」とみなす PBI ステータス（新規発射を止め、状態ボードで active 扱いにする）。 */
+export const PBI_OPEN_STATUSES: ReadonlySet<PbiStatus> = new Set([
+  "decomposing",
+  "awaiting_approval",
+  "executing",
+]);
+
+export function isPbiOpen(status: PbiStatus): boolean {
+  return PBI_OPEN_STATUSES.has(status);
+}
+
 const PBI_TRANSITIONS: Record<PbiStatus, readonly PbiStatus[]> = {
   decomposing: ["awaiting_approval", "failed", "cancelled"],
   awaiting_approval: ["decomposing", "executing", "failed", "cancelled"],
