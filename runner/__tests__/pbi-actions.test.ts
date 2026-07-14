@@ -74,7 +74,7 @@ afterEach(() => {
 });
 
 describe("retryTask", () => {
-  it("returns a failed task to pending, clears the escalation, and re-dispatches", () => {
+  it("returns a failed task to pending, clears the escalation, and re-dispatches", async () => {
     const pbiId = executing();
     pbiStore.setSubTasks(pbiId, [rec({ key: "t1", state: "failed" })]);
     pbiStore.addEscalation(pbiId, {
@@ -83,17 +83,46 @@ describe("retryTask", () => {
       detail: "boom",
     });
 
-    retryTask(deps, pbiId, "t1");
+    await retryTask(deps, pbiId, "t1");
 
     const after = pbiStore.get(pbiId)!;
     expect(after.subTasks[0].state).toBe("running"); // dispatchReady が発射
     expect(after.escalations).toHaveLength(0);
     expect(jobStore.list()).toHaveLength(1);
   });
+
+  it("does not refire while the previous job is still alive (failed was a misjudgement)", async () => {
+    // 前ジョブが実際にはまだ稼働中なのに sub-task が failed 判定された状況からの
+    // retry。jobId を保持したまま pending に戻り、発射前ガードが二重発射を防ぐ。
+    const pbiId = executing();
+    const prev = jobStore.create({
+      repo: "r",
+      issueNumber: 100,
+      issueTitle: "t",
+      branch: "feature/100-t",
+    });
+    jobStore.transition(prev.id, "running");
+    pbiStore.setSubTasks(pbiId, [
+      rec({ key: "t1", state: "failed", jobId: prev.id }),
+    ]);
+    pbiStore.addEscalation(pbiId, {
+      kind: "task_failed",
+      subTaskKey: "t1",
+      detail: "boom",
+    });
+
+    await retryTask(deps, pbiId, "t1");
+
+    const after = pbiStore.get(pbiId)!;
+    expect(after.subTasks[0].state).toBe("pending"); // 発射されず待機
+    expect(after.subTasks[0].jobId).toBe(prev.id); // 前ジョブへの参照を保持
+    expect(after.escalations).toHaveLength(0);
+    expect(jobStore.list()).toHaveLength(1); // 新規ジョブは作られない
+  });
 });
 
 describe("skipTask", () => {
-  it("marks the task skipped and completes the PBI if it was the last", () => {
+  it("marks the task skipped and completes the PBI if it was the last", async () => {
     const pbiId = executing();
     pbiStore.setSubTasks(pbiId, [rec({ key: "t1", state: "failed" })]);
     pbiStore.addEscalation(pbiId, {
@@ -102,7 +131,7 @@ describe("skipTask", () => {
       detail: "boom",
     });
 
-    skipTask(deps, pbiId, "t1");
+    await skipTask(deps, pbiId, "t1");
 
     const after = pbiStore.get(pbiId)!;
     expect(after.subTasks[0].state).toBe("skipped");
@@ -238,14 +267,14 @@ describe("markTaskDone", () => {
 });
 
 describe("pause / resume", () => {
-  it("pause stops new dispatch; resume re-dispatches ready tasks", () => {
+  it("pause stops new dispatch; resume re-dispatches ready tasks", async () => {
     const pbiId = executing();
     pbiStore.setSubTasks(pbiId, [rec({ key: "t1" })]);
 
     pausePbi(pbiStore, pbiId);
     expect(pbiStore.get(pbiId)!.paused).toBe(true);
 
-    resumePbi(deps, pbiId);
+    await resumePbi(deps, pbiId);
     expect(pbiStore.get(pbiId)!.paused).toBe(false);
     expect(pbiStore.get(pbiId)!.subTasks[0].state).toBe("running");
   });

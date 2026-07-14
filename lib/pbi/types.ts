@@ -54,7 +54,9 @@ export type SubTaskState =
   | "skipped"; // 人間がスキップ指示
 
 const SUBTASK_TRANSITIONS: Record<SubTaskState, readonly SubTaskState[]> = {
-  pending: ["running", "skipped", "failed"],
+  // pending -> in_review / merged は発射前ガードが branch の既存 PR を検知した
+  // ときの整合遷移（job を作らず PR の実態に合わせる）。
+  pending: ["running", "in_review", "merged", "skipped", "failed"],
   running: ["in_review", "done_no_pr", "failed", "skipped"],
   in_review: ["merged", "failed", "skipped"],
   // 失敗 → リトライ / スキップ。in_review / merged はブランチ名の PR

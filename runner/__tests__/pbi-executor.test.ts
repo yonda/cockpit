@@ -82,7 +82,7 @@ afterEach(() => {
 });
 
 describe("dispatchReady", () => {
-  it("fires a Launch Pad job for each ready sub-task and marks it running", () => {
+  it("fires a Launch Pad job for each ready sub-task and marks it running", async () => {
     const pbi = pbiStore.create({ repo: "yonda/cockpit", issueNumber: 42, title: "P" });
     pbiStore.transition(pbi.id, "awaiting_approval");
     pbiStore.transition(pbi.id, "executing");
@@ -91,7 +91,7 @@ describe("dispatchReady", () => {
       rec({ key: "t2", issueNumber: 101, branch: "feature/101-t", dependsOn: ["t1"] }),
     ]);
 
-    dispatchReady(deps, pbi.id);
+    await dispatchReady(deps, pbi.id);
 
     const after = pbiStore.get(pbi.id)!;
     const t1 = after.subTasks.find((t) => t.key === "t1")!;
@@ -104,31 +104,145 @@ describe("dispatchReady", () => {
     expect(jobStore.list()[0].issueNumber).toBe(100);
   });
 
-  it("does not dispatch when the PBI is paused", () => {
+  it("does not dispatch when the PBI is paused", async () => {
     const pbi = pbiStore.create({ repo: "r", issueNumber: 42, title: "P" });
     pbiStore.transition(pbi.id, "awaiting_approval");
     pbiStore.transition(pbi.id, "executing");
     pbiStore.update(pbi.id, { paused: true });
     pbiStore.setSubTasks(pbi.id, [rec({ key: "t1" })]);
 
-    dispatchReady(deps, pbi.id);
+    await dispatchReady(deps, pbi.id);
     expect(jobStore.list()).toHaveLength(0);
     expect(pbiStore.get(pbi.id)!.subTasks[0].state).toBe("pending");
   });
 });
 
+describe("dispatchReady 発射前ガード", () => {
+  const executing = () => {
+    const pbi = pbiStore.create({ repo: "r", issueNumber: 42, title: "P" });
+    pbiStore.transition(pbi.id, "awaiting_approval");
+    pbiStore.transition(pbi.id, "executing");
+    return pbi.id;
+  };
+
+  it("does not fire a new job while the task's previous job is still alive", async () => {
+    // failed の誤判定 → retry で pending に戻ったが、前ジョブはまだ稼働中の想定
+    const pbiId = executing();
+    const prev = jobStore.create({
+      repo: "r", issueNumber: 100, issueTitle: "t", branch: "feature/100-t",
+    });
+    jobStore.transition(prev.id, "running");
+    pbiStore.setSubTasks(pbiId, [rec({ key: "t1", jobId: prev.id })]);
+
+    await dispatchReady(deps, pbiId);
+
+    const t1 = pbiStore.get(pbiId)!.subTasks[0];
+    expect(t1.state).toBe("pending"); // 発射されず待機
+    expect(t1.jobId).toBe(prev.id);
+    expect(jobStore.list()).toHaveLength(1); // 新規ジョブなし
+  });
+
+  it("aligns the task to in_review (recording prUrl) instead of firing when an open PR exists on the branch", async () => {
+    const pbiId = executing();
+    pbiStore.setSubTasks(pbiId, [rec({ key: "t1" })]);
+    const github = fakeGithub({
+      prStateForBranch: async () => ({
+        kind: "open",
+        url: "https://github.com/yonda/cockpit/pull/9",
+        reviewCommentCount: 0,
+      }),
+    });
+
+    await dispatchReady({ ...deps, github }, pbiId);
+
+    const t1 = pbiStore.get(pbiId)!.subTasks[0];
+    expect(t1.state).toBe("in_review");
+    expect(t1.prUrl).toBe("https://github.com/yonda/cockpit/pull/9");
+    expect(jobStore.list()).toHaveLength(0); // job は作らない
+  });
+
+  it("aligns the task to merged (recording prUrl, closing the sub-issue) when a merged PR exists, and completes the PBI", async () => {
+    const pbiId = executing();
+    pbiStore.setSubTasks(pbiId, [rec({ key: "t1", issueNumber: 100 })]);
+    const closed: number[] = [];
+    const github = fakeGithub({
+      prStateForBranch: async () => ({
+        kind: "merged",
+        url: "https://github.com/yonda/cockpit/pull/9",
+      }),
+      closeIssue: async (_repo, number) => {
+        closed.push(number);
+      },
+    });
+
+    await dispatchReady({ ...deps, github }, pbiId);
+
+    const after = pbiStore.get(pbiId)!;
+    expect(after.subTasks[0].state).toBe("merged");
+    expect(after.subTasks[0].prUrl).toBe("https://github.com/yonda/cockpit/pull/9");
+    expect(jobStore.list()).toHaveLength(0); // job は作らない
+    expect(closed).toEqual([100]); // poller の merged 経路と同様に sub-issue をクローズ
+    expect(after.status).toBe("completed"); // 唯一のタスクが merged なので完了
+  });
+
+  it("still aligns to merged when closing the sub-issue fails (best-effort)", async () => {
+    const pbiId = executing();
+    pbiStore.setSubTasks(pbiId, [rec({ key: "t1" })]);
+    const github = fakeGithub({
+      prStateForBranch: async () => ({ kind: "merged", url: "u" }),
+      closeIssue: async () => {
+        throw new Error("gh down");
+      },
+    });
+
+    await dispatchReady({ ...deps, github }, pbiId);
+
+    expect(pbiStore.get(pbiId)!.subTasks[0].state).toBe("merged");
+    expect(jobStore.list()).toHaveLength(0);
+  });
+
+  it("fires as before when prStateForBranch throws (GitHub outage must not stall the PBI)", async () => {
+    const pbiId = executing();
+    pbiStore.setSubTasks(pbiId, [rec({ key: "t1" })]);
+    const github = fakeGithub({
+      prStateForBranch: async () => {
+        throw new Error("gh api down");
+      },
+    });
+
+    await dispatchReady({ ...deps, github }, pbiId);
+
+    const t1 = pbiStore.get(pbiId)!.subTasks[0];
+    expect(t1.state).toBe("running");
+    expect(jobStore.list()).toHaveLength(1);
+  });
+
+  it("fires when the branch PR was closed without merge (retry can proceed)", async () => {
+    const pbiId = executing();
+    pbiStore.setSubTasks(pbiId, [rec({ key: "t1" })]);
+    const github = fakeGithub({
+      prStateForBranch: async () => ({ kind: "closed", url: "u" }),
+    });
+
+    await dispatchReady({ ...deps, github }, pbiId);
+
+    expect(pbiStore.get(pbiId)!.subTasks[0].state).toBe("running");
+    expect(jobStore.list()).toHaveLength(1);
+  });
+});
+
 describe("onJobUpdated", () => {
-  const setup = () => {
+  const setup = async () => {
     const pbi = pbiStore.create({ repo: "r", issueNumber: 42, title: "P" });
     pbiStore.transition(pbi.id, "awaiting_approval");
     pbiStore.transition(pbi.id, "executing");
     pbiStore.setSubTasks(pbi.id, [rec({ key: "t1" })]);
-    dispatchReady(deps, pbi.id);
+    await dispatchReady(deps, pbi.id);
     return pbiStore.get(pbi.id)!;
   };
 
   it("moves the sub-task to in_review on job done and records the PR url", async () => {
-    const pbi = setup();
+    const pbi = await setup();
     const jobId = pbiStore.get(pbi.id)!.subTasks[0].jobId!;
     // setup() の dispatchReady で fake scheduler が既に queued→running 済み
     const job = { ...jobStore.get(jobId)! };
@@ -166,7 +280,7 @@ describe("onJobUpdated", () => {
         dependsOn: ["t1"],
       }),
     ]);
-    dispatchReady(deps, pbi.id);
+    await dispatchReady(deps, pbi.id);
     const jobId = pbiStore.get(pbi.id)!.subTasks.find((t) => t.key === "t1")!
       .jobId!;
     const done = jobStore.transition(jobId, "done", { noChanges: true });
@@ -188,7 +302,7 @@ describe("onJobUpdated", () => {
   });
 
   it("completes the PBI when the only sub-task finishes with a no-changes done job", async () => {
-    const pbi = setup(); // t1 のみ、running 状態
+    const pbi = await setup(); // t1 のみ、running 状態
     const jobId = pbiStore.get(pbi.id)!.subTasks[0].jobId!;
     const done = jobStore.transition(jobId, "done", { noChanges: true });
 
@@ -200,7 +314,7 @@ describe("onJobUpdated", () => {
   });
 
   it("marks the sub-task failed and escalates on job failure", async () => {
-    const pbi = setup();
+    const pbi = await setup();
     const jobId = pbiStore.get(pbi.id)!.subTasks[0].jobId!;
     // setup() の dispatchReady で fake scheduler が既に queued→running 済み
     const failed = jobStore.transition(jobId, "failed", { error: "boom" });
