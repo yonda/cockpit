@@ -46,6 +46,10 @@ describe("canSubTaskTransition", () => {
   it("allows failed -> pending for retry / boot reconciliation", () => {
     expect(canSubTaskTransition("failed", "pending")).toBe(true);
   });
+  it("allows failed -> in_review / merged for PR fallback recovery", () => {
+    expect(canSubTaskTransition("failed", "in_review")).toBe(true);
+    expect(canSubTaskTransition("failed", "merged")).toBe(true);
+  });
   it("allows running -> done_no_pr (差分なし完了) but not from other states", () => {
     expect(canSubTaskTransition("running", "done_no_pr")).toBe(true);
     expect(canSubTaskTransition("pending", "done_no_pr")).toBe(false);

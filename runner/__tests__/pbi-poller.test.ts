@@ -142,6 +142,138 @@ describe("pollOnce", () => {
     expect(pbiStore.get(pbiId)!.subTasks[0].state).toBe("in_review");
   });
 
+  it("recovers a failed sub-task to merged when its branch has a merged PR", async () => {
+    const pbiId = executing();
+    pbiStore.setSubTasks(pbiId, [
+      rec({ key: "t1", state: "failed", jobId: null, prUrl: null }),
+    ]);
+    pbiStore.addEscalation(pbiId, {
+      kind: "task_failed",
+      subTaskKey: "t1",
+      detail: "ジョブが failed で終了しました",
+    });
+    const github = new FakeGitHub();
+    github.prStates["feature/100-t"] = {
+      kind: "merged",
+      url: "https://github.com/yonda/cockpit/pull/9",
+    };
+
+    await pollOnce({ pbiStore, github, exec });
+
+    const after = pbiStore.get(pbiId)!;
+    expect(after.subTasks[0].state).toBe("merged");
+    expect(after.subTasks[0].prUrl).toBe(
+      "https://github.com/yonda/cockpit/pull/9",
+    );
+    expect(github.closed).toEqual([100]);
+    expect(after.escalations.filter((e) => e.kind === "task_failed")).toHaveLength(0);
+    expect(after.status).toBe("completed");
+  });
+
+  it("recovers a failed sub-task to in_review when its branch has an open PR", async () => {
+    const pbiId = executing();
+    pbiStore.setSubTasks(pbiId, [
+      rec({ key: "t1", state: "failed", jobId: null, prUrl: null }),
+    ]);
+    pbiStore.addEscalation(pbiId, {
+      kind: "task_failed",
+      subTaskKey: "t1",
+      detail: "ジョブが failed で終了しました",
+    });
+    const github = new FakeGitHub();
+    github.prStates["feature/100-t"] = {
+      kind: "open",
+      url: "https://github.com/yonda/cockpit/pull/9",
+      reviewCommentCount: 0,
+    };
+
+    await pollOnce({ pbiStore, github, exec });
+
+    const after = pbiStore.get(pbiId)!;
+    expect(after.subTasks[0].state).toBe("in_review");
+    expect(after.subTasks[0].prUrl).toBe(
+      "https://github.com/yonda/cockpit/pull/9",
+    );
+    expect(after.escalations.filter((e) => e.kind === "task_failed")).toHaveLength(0);
+    expect(github.closed).toEqual([]);
+
+    // 回復後は既存の in_review 監視に乗る: マージされれば merged へ
+    github.prStates["feature/100-t"] = {
+      kind: "merged",
+      url: "https://github.com/yonda/cockpit/pull/9",
+    };
+    await pollOnce({ pbiStore, github, exec });
+    expect(pbiStore.get(pbiId)!.subTasks[0].state).toBe("merged");
+    expect(github.closed).toEqual([100]);
+  });
+
+  it("does not recover a failed sub-task when its branch has no PR or only an unmerged closed PR", async () => {
+    const pbiId = executing();
+    pbiStore.setSubTasks(pbiId, [
+      rec({ key: "t1", state: "failed", jobId: null, prUrl: null }),
+      rec({
+        key: "t2",
+        state: "failed",
+        jobId: null,
+        prUrl: null,
+        issueNumber: 101,
+        branch: "feature/101-t",
+      }),
+    ]);
+    pbiStore.addEscalation(pbiId, {
+      kind: "task_failed",
+      subTaskKey: "t1",
+      detail: "ジョブが failed で終了しました",
+    });
+    const github = new FakeGitHub();
+    // t1 のブランチには PR なし ({ kind: "none" })、t2 は unmerged closed のみ
+    github.prStates["feature/101-t"] = {
+      kind: "closed",
+      url: "https://github.com/yonda/cockpit/pull/10",
+    };
+
+    await pollOnce({ pbiStore, github, exec });
+
+    const after = pbiStore.get(pbiId)!;
+    expect(after.subTasks[0].state).toBe("failed");
+    expect(after.subTasks[1].state).toBe("failed");
+    expect(after.subTasks[0].prUrl).toBeNull();
+    expect(after.subTasks[1].prUrl).toBeNull();
+    expect(github.closed).toEqual([]);
+    // エスカレーションは残る（回復していないので取り下げない）
+    expect(after.escalations.filter((e) => e.kind === "task_failed")).toHaveLength(1);
+  });
+
+  it("dispatches a dependent pending sub-task once the failed one recovers to merged", async () => {
+    const pbiId = executing();
+    pbiStore.setSubTasks(pbiId, [
+      rec({ key: "t3", state: "failed", jobId: null, prUrl: null }),
+      rec({
+        key: "t4",
+        state: "pending",
+        jobId: null,
+        prUrl: null,
+        branch: null,
+        issueNumber: 104,
+        dependsOn: ["t3"],
+      }),
+    ]);
+    const github = new FakeGitHub();
+    github.prStates["feature/100-t"] = {
+      kind: "merged",
+      url: "https://github.com/yonda/cockpit/pull/9",
+    };
+
+    await pollOnce({ pbiStore, github, exec });
+
+    const after = pbiStore.get(pbiId)!;
+    expect(after.subTasks.find((t) => t.key === "t3")!.state).toBe("merged");
+    // t3 の回復で依存が満たされ、既存の dispatchReady 経路で t4 が発射される
+    const t4 = after.subTasks.find((t) => t.key === "t4")!;
+    expect(t4.state).toBe("running");
+    expect(t4.jobId).not.toBeNull();
+  });
+
   it("isolates a per-PBI failure so other PBIs still get processed", async () => {
     const pbi1 = executing();
     pbiStore.setSubTasks(pbi1, [rec({ key: "t1", branch: "feature/100-t" })]);
