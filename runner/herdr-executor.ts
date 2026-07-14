@@ -36,6 +36,11 @@ export interface HerdrClient {
   ): Promise<void>;
   /** agent_status が done になるまで待つ。timeout したら false。 */
   waitDone(paneId: string, timeoutMs: number): Promise<boolean>;
+  /**
+   * ペインの現在の agent_status を返す (例: "idle" | "running" | "done")。
+   * 取得できないときは "unknown"。idle timeout 確定直前の done 再確認に使う。
+   */
+  agentStatus(paneId: string): Promise<string>;
   /** ペインを閉じて子セッションを終了する (abort・後片付け)。 */
   closePane(paneId: string): Promise<void>;
 }
@@ -82,8 +87,13 @@ export type HerdrExecutorDeps = {
   pollIntervalMs?: number;
   /** session_id 出現を待つ上限 (ms)。既定 30000。 */
   sessionTimeoutMs?: number;
-  /** 完了 (agent_status done) を待つ上限 (ms)。既定 30 分。 */
-  doneTimeoutMs?: number;
+  /**
+   * transcript の進行 (追記) が止まってから timeout と判定するまでの idle 時間 (ms)。
+   * 既定 30 分 (1_800_000)。従来の「経過時間で一律に打ち切る doneTimeoutMs」の置き換え
+   * (#95): activity の追記が続く限り、総経過時間がどれだけ長くてもジョブは timeout
+   * しない。timeout 確定の直前には agent_status を再確認し、done なら成功として扱う。
+   */
+  idleTimeoutMs?: number;
 };
 
 // transcript の 1 行 (assistant メッセージ) から activity 文字列を 1 つ取り出す。
@@ -119,7 +129,7 @@ export class HerdrExecutor implements AgentExecutor {
     const now = this.deps.now ?? (() => Date.now());
     const pollIntervalMs = this.deps.pollIntervalMs ?? 1000;
     const sessionTimeoutMs = this.deps.sessionTimeoutMs ?? 30_000;
-    const doneTimeoutMs = this.deps.doneTimeoutMs ?? 30 * 60_000;
+    const idleTimeoutMs = this.deps.idleTimeoutMs ?? 30 * 60_000;
 
     let paneId: string | null = null;
     let closed = false;
@@ -154,6 +164,12 @@ export class HerdrExecutor implements AgentExecutor {
       }
       opts.signal.addEventListener("abort", onAbort, { once: true });
 
+      // 完了検知の共有状態。finally から waitDone の張り直しを止められるよう
+      // 内側 try の外で宣言する (成功・失敗・throw のどの経路でも止まる)。
+      let done = false;
+      let doneError: unknown = null;
+      let waitLoopStopped = false;
+
       try {
         await this.deps.herdr.startAgent(paneId, {
           cwd: opts.cwd,
@@ -185,34 +201,60 @@ export class HerdrExecutor implements AgentExecutor {
           offset = primed.nextOffset;
         }
 
-        // 完了検知と activity ポーリングを並行させる。waitDone が resolve でも
-        // reject でも done を確定させ、while ループが確実に抜けるようにする
-        // (reject を握りつぶさず後段の await donePromise で顕在化させる)。
-        const donePromise = this.deps.herdr.waitDone(paneId, doneTimeoutMs);
-        let done = false;
-        donePromise.then(
-          () => {
-            done = true;
-          },
-          () => {
-            done = true;
-          },
-        );
+        // 完了検知と activity ポーリングを並行させる。固定の doneTimeout は使わない
+        // (#95): waitDone は idleTimeoutMs の窓で張り、窓内に done へ達しなければ
+        // 張り直す。ジョブを打ち切るかどうかは下のポーリング側が「transcript の進行が
+        // idleTimeoutMs 以上止まったか」だけで判定する (作業が続く限り timeout しない)。
+        // reject (実エラー) は doneError に載せ、ポーリング側で throw して顕在化させる。
+        const pane = paneId;
+        void (async () => {
+          while (!waitLoopStopped && !done) {
+            try {
+              if (await this.deps.herdr.waitDone(pane, idleTimeoutMs)) {
+                done = true;
+              }
+            } catch (err) {
+              doneError = err;
+              return;
+            }
+          }
+        })();
 
+        let lastProgressAt = now();
         while (!done) {
           if (opts.signal.aborted) {
             await closeOnce();
             return { ok: false, error: "aborted" };
           }
+          if (doneError !== null) throw doneError;
           const { activities, nextOffset } =
             await this.deps.transcript.readActivitySince(session.path, offset);
+          // 進行 = transcript への追記。activity に抽出されない行 (thinking 等) でも
+          // オフセットは進むため、抽出結果ではなく offset の前進で判定する。
+          if (nextOffset !== offset) lastProgressAt = now();
           for (const a of activities) hooks.onActivity(a);
           offset = nextOffset;
+          if (
+            !done &&
+            doneError === null &&
+            now() - lastProgressAt >= idleTimeoutMs
+          ) {
+            // timeout 確定の直前に agent_status を再確認する。「done 済みだが
+            // transcript が進まない」ケース (wait の窓間の取りこぼし等) を
+            // failed に倒さないため。
+            if ((await this.deps.herdr.agentStatus(pane)) === "done") {
+              done = true;
+              break;
+            }
+            outcome = "keep";
+            return {
+              ok: false,
+              error: `agent made no transcript progress for ${idleTimeoutMs}ms (idle timeout)`,
+            };
+          }
           await sleep(pollIntervalMs);
         }
 
-        // reject ならここで throw して外側 catch が実エラーとして返す。
-        const ok = await donePromise;
         // done 後に残った activity を最後まで吸い上げる。
         const tail = await this.deps.transcript.readActivitySince(
           session.path,
@@ -224,10 +266,9 @@ export class HerdrExecutor implements AgentExecutor {
           await closeOnce();
           return { ok: false, error: "aborted" };
         }
-        if (ok) return { ok: true };
-        outcome = "keep";
-        return { ok: false, error: "agent did not reach done before timeout" };
+        return { ok: true };
       } finally {
+        waitLoopStopped = true;
         opts.signal.removeEventListener("abort", onAbort);
       }
     } catch (err) {
