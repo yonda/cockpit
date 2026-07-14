@@ -5,13 +5,10 @@ cd "$(dirname "$0")/.."
 
 LABEL="com.cockpit.app"
 CAL_LABEL="com.cockpit.calendar"
-RUNNER_LABEL="com.cockpit.runner"
 PLIST_TEMPLATE="services/cockpit.plist.template"
 CAL_PLIST_TEMPLATE="services/cockpit-calendar.plist.template"
-RUNNER_PLIST_TEMPLATE="services/cockpit-runner.plist.template"
 PLIST_DEST="$HOME/Library/LaunchAgents/${LABEL}.plist"
 CAL_PLIST_DEST="$HOME/Library/LaunchAgents/${CAL_LABEL}.plist"
-RUNNER_PLIST_DEST="$HOME/Library/LaunchAgents/${RUNNER_LABEL}.plist"
 PROJECT_DIR="$(pwd -P)"
 DOMAIN_TARGET="gui/$(id -u)"
 
@@ -29,15 +26,8 @@ Commands:
   calendar-install    calendar-sync エージェントを launchd に登録する
   calendar-uninstall  calendar-sync エージェントを launchd から外す
   calendar-status     calendar-sync エージェントの登録状態を表示
-  runner-install      runner を launchd に登録する
-  runner-uninstall    runner を launchd から外す
-  runner-restart      runner プロセスを再起動する
-  runner-status       runner の登録状態を表示
-  runner-logs         runner ログを tail -f
-  runner-token-sync <owner>
-                      1Password から owner 別トークンを ~/.config/cockpit/tokens/<owner> へ同期する
 
-Label: ${LABEL} / ${CAL_LABEL} / ${RUNNER_LABEL}
+Label: ${LABEL} / ${CAL_LABEL}
 Plist: ${PLIST_DEST}
 EOF
 }
@@ -113,64 +103,6 @@ cmd_errlogs() {
   tail -f "$path"
 }
 
-cmd_runner_logs() {
-  local out_path="$HOME/Library/Logs/cockpit-runner.out.log"
-  local err_path="$HOME/Library/Logs/cockpit-runner.err.log"
-  [[ -f "$out_path" ]] || { echo "no log yet: $out_path (err log: $err_path)"; exit 0; }
-  tail -f "$out_path" "$err_path"
-}
-
-# 1Password から owner 別トークンを ~/.config/cockpit/tokens/<owner> へ同期する。
-# op://Private/cockpit-github-token-<owner>/password を読み、対象 owner に限定した
-# fine-grained PAT を 1 ファイル 1 owner で配置する (COCKPIT_RUNNER_TOKEN_OP_REF で
-# 参照先を上書き可、COCKPIT_TOKENS_DIR で配置先ディレクトリを上書き可)。
-cmd_runner_token_sync() {
-  local owner="${1:?owner を指定してください (例: runner-token-sync acme)}"
-  local ref="${COCKPIT_RUNNER_TOKEN_OP_REF:-op://Private/cockpit-github-token-${owner}/password}"
-  local dir="${COCKPIT_TOKENS_DIR:-$HOME/.config/cockpit/tokens}"
-  local file="${dir}/${owner}"
-  command -v op >/dev/null || { echo "op (1Password CLI) が見つかりません" >&2; exit 1; }
-  mkdir -p "${dir}"
-  rm -f "${file}"; install -m 600 /dev/null "${file}"
-  if ! op read "${ref}" > "${file}"; then
-    rm -f "${file}"; echo "op read に失敗: ${ref}" >&2; exit 1
-  fi
-  echo "synced ${ref} -> ${file}"
-}
-
-# 構造ガード (Issue #54): runner は weak PAT (対象リポジトリ owner 限定の
-# fine-grained PAT) が無いと起動しない (fail-closed、runner/github-token.ts)。
-# install / restart の前に同じ判定で preflight し、launchd 配下でのクラッシュ
-# ループを未然に防ぐ。~/.config/cockpit/tokens/ 配下の owner 別トークンを全件
-# 検証する (COCKPIT_TOKENS_DIR で配置先ディレクトリを上書き可)。
-# 判定を runner の loadRunnerToken と揃える: 前後空白を除去して空、または内部に
-# 空白 (複数行・複数トークン) があれば NG。加えて GitHub API で有効性も検証する。
-# 1 つでも MISSING/INVALID/NG があれば非ゼロで返す。
-check_runner_token() {
-  local dir="${COCKPIT_TOKENS_DIR:-$HOME/.config/cockpit/tokens}"
-  if [[ ! -d "${dir}" ]] || [[ -z "$(ls -A "${dir}" 2>/dev/null)" ]]; then
-    echo "runner-token: MISSING (${dir}/<owner> に fine-grained PAT を配置してください)"
-    return 1
-  fi
-  local failed=0
-  local f tok
-  for f in "${dir}"/*; do
-    tok="$(<"${f}")"
-    tok="${tok#"${tok%%[![:space:]]*}"}"
-    tok="${tok%"${tok##*[![:space:]]}"}"
-    if [[ -z "${tok}" || "${tok}" == *[[:space:]]* ]]; then
-      echo "runner-token: INVALID ($(basename "${f}") — 空または複数行です)"
-      failed=1
-    elif GH_TOKEN="${tok}" gh api rate_limit >/dev/null 2>&1; then
-      echo "runner-token: ok ($(basename "${f}"))"
-    else
-      echo "runner-token: NG ($(basename "${f}") — 認証失敗)"
-      failed=1
-    fi
-  done
-  [[ "${failed}" -eq 0 ]]
-}
-
 case "${1:-}" in
   install)            cmd_install ;;
   uninstall)          uninstall_agent "${LABEL}" "${PLIST_DEST}" ;;
@@ -182,22 +114,6 @@ case "${1:-}" in
                       echo "calendar-sync を launchd に登録しました" ;;
   calendar-uninstall) uninstall_agent "${CAL_LABEL}" "${CAL_PLIST_DEST}" ;;
   calendar-status)    status_agent "${CAL_LABEL}" ;;
-  runner-install)     [[ -f dist/runner.cjs ]] || { echo "先に pnpm build:runner を実行してください" >&2; exit 1; }
-                      check_runner_token >&2 || exit 1
-                      install_agent "${RUNNER_PLIST_TEMPLATE}" "${RUNNER_LABEL}" "${RUNNER_PLIST_DEST}"
-                      echo "runner を launchd に登録しました" ;;
-  runner-uninstall)   uninstall_agent "${RUNNER_LABEL}" "${RUNNER_PLIST_DEST}" ;;
-  runner-restart)     check_runner_token >&2 || exit 1
-                      launchctl kickstart -k "${DOMAIN_TARGET}/${RUNNER_LABEL}"
-                      echo "runner restarted" ;;
-  runner-status)      status_agent "${RUNNER_LABEL}"
-                      echo "--- health ---"
-                      command -v gh >/dev/null && gh auth status >/dev/null 2>&1 && echo "gh: ok" || echo "gh: NG (gh auth login)"
-                      git wt >/dev/null 2>&1 && echo "git wt: ok" || echo "git wt: NG (brew install k1LoW/tap/git-wt)"
-                      check_runner_token || true
-                      [[ -S "$HOME/.cache/cockpit/runner.sock" ]] && echo "socket: ok" || echo "socket: not listening" ;;
-  runner-logs)        cmd_runner_logs ;;
-  runner-token-sync)  cmd_runner_token_sync "${2:-}" ;;
   ""|help|-h|--help)  usage ;;
   *) echo "unknown command: $1" >&2; usage; exit 1 ;;
 esac
