@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Zap } from "lucide-react";
 import type { LaunchIssue } from "@/lib/github/issues";
 import { EmptyState } from "./EmptyState";
@@ -14,13 +14,23 @@ const ACTIVE = new Set(["queued", "running", "waiting_input"]);
 
 export function LaunchBoard({ issues }: { issues: LaunchIssue[] }) {
   const { result, live } = useJobsState();
-  const { busy: firing, run: runFire } = useInFlightAction<number>();
+  // 成功時はガードを維持し、ポーリングが active を反映するまでボタンを disabled のまま保つ。
+  const { busy: firing, run: runFire, reset: resetFiring } = useInFlightAction<number>({
+    keepInFlightOnSuccess: true,
+  });
   const [fireError, setFireError] = useState<string | null>(null);
 
   const jobs = result.status === "ok" ? result.jobs : [];
   const activeIssueNumbers = new Set(
     jobs.filter((j) => ACTIVE.has(j.status)).map((j) => j.issueNumber),
   );
+
+  // ポーリングで発射対象が active 化したら firing を解除する。以降は disabled={active || ...}
+  // の active 側が引き継ぐため、他 issue の launch を firing が永久にブロックしない。
+  const firingBecameActive = firing !== null && activeIssueNumbers.has(firing);
+  useEffect(() => {
+    if (firingBecameActive) resetFiring();
+  }, [firingBecameActive, resetFiring]);
 
   const fire = (issue: LaunchIssue) =>
     runFire(async () => {

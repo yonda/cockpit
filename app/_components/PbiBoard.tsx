@@ -1,7 +1,7 @@
 // app/_components/PbiBoard.tsx
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Zap } from "lucide-react";
 import type { AssignedIssue } from "@/lib/repos/types";
 import { EmptyState } from "./EmptyState";
@@ -19,7 +19,10 @@ const issueKey = (repo: string, issueNumber: number) => `${repo}#${issueNumber}`
 
 export function PbiBoard({ issues }: { issues: AssignedIssue[] }) {
   const { result, jobsById, live } = usePbiState();
-  const { busy: firing, run: runFire } = useInFlightAction<string>();
+  // 成功時はガードを維持し、ポーリングが active を反映するまでボタンを disabled のまま保つ。
+  const { busy: firing, run: runFire, reset: resetFiring } = useInFlightAction<string>({
+    keepInFlightOnSuccess: true,
+  });
   const [fireError, setFireError] = useState<string | null>(null);
   const [segment, setSegment] = useState<Segment>("active");
 
@@ -28,6 +31,13 @@ export function PbiBoard({ issues }: { issues: AssignedIssue[] }) {
   const donePbis = pbis.filter((p) => !OPEN.has(p.status));
   const visiblePbis = segment === "all" ? pbis : segment === "active" ? activePbis : donePbis;
   const activeIssues = new Set(activePbis.map((p) => issueKey(p.repo, p.issueNumber)));
+
+  // ポーリングで発射対象が active 化したら firing を解除する。以降は disabled={active || ...}
+  // の active 側が引き継ぐため、他 issue の launch を firing が永久にブロックしない。
+  const firingBecameActive = firing !== null && activeIssues.has(firing);
+  useEffect(() => {
+    if (firingBecameActive) resetFiring();
+  }, [firingBecameActive, resetFiring]);
 
   const fire = (issue: AssignedIssue) =>
     runFire(async () => {

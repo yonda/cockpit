@@ -15,7 +15,9 @@ import { useCallback, useRef, useState } from "react";
  *
  * `action` は成功で `true` / 失敗で `false` を返す。既定では成功・失敗いずれでもガードを
  * 解除して再操作可能にする。`keepInFlightOnSuccess: true` を渡すと成功時のみガードを維持し
- * （＝ボタンを押せないまま保つ）、失敗時のみ解除する。
+ * （＝ボタンを押せないまま保つ）、失敗時のみ解除する。維持したガードは、呼び出し側が
+ * {@link UseInFlightAction.reset} を呼んで解除する（例: ポーリングで対象が active 化し、
+ * disabled の引き継ぎ先ができたタイミングで解除する）。
  *
  * @template T busy state に載せるトークンの型。既定は真偽値相当（`true` / `null`）。
  *   どのボタンが発射中かを識別したい場合は issue key 等を `T` に指定して `run(action, token)`
@@ -42,6 +44,12 @@ export type UseInFlightAction<T> = {
    * @param token busy state に載せる識別子。省略時は `true` 相当。
    */
   readonly run: (action: () => Promise<boolean>, token?: T) => Promise<void>;
+  /**
+   * in-flight ガードを手動で解除する（`inFlightRef` と `busy` をクリア）。
+   * `keepInFlightOnSuccess: true` で成功後も維持したガードを、呼び出し側の判断で
+   * 解除するために使う（例: ポーリングで対象が active 化し disabled を引き継げるとき）。
+   */
+  readonly reset: () => void;
 };
 
 export function useInFlightAction<T = true>(
@@ -74,5 +82,10 @@ export function useInFlightAction<T = true>(
     [keepInFlightOnSuccess],
   );
 
-  return { busy, isBusy: busy !== null, run };
+  const reset = useCallback(() => {
+    inFlightRef.current = false;
+    setBusy(null);
+  }, []);
+
+  return { busy, isBusy: busy !== null, run, reset };
 }
