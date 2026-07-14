@@ -10,6 +10,7 @@ import {
 } from "./pbi-lifecycle";
 import {
   cancelPbi,
+  markTaskDone,
   pausePbi,
   resumePbi,
   retryTask,
@@ -102,6 +103,11 @@ export async function handlePbiRequest(
 
     case "pbi.skipTask":
       await skipTask(deps.exec, request.params.pbiId, request.params.key);
+      return { result: {} };
+
+    case "pbi.markTaskDone":
+      // 無効遷移などのエラーはこの reject が server.ts でソケット応答のエラーになる
+      await markTaskDone(deps.exec, request.params.pbiId, request.params.key);
       return { result: {} };
 
     case "pbi.cancel":

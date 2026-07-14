@@ -61,7 +61,8 @@ const SUBTASK_TRANSITIONS: Record<SubTaskState, readonly SubTaskState[]> = {
   in_review: ["merged", "failed", "skipped"],
   // 失敗 → リトライ / スキップ。in_review / merged はブランチ名の PR
   // フォールバック検索による自動回復（poller が実態に合わせて戻す）。
-  failed: ["running", "pending", "in_review", "merged", "skipped"],
+  // done_no_pr は人間の完了操作 (markTaskDone) で PR がない場合の遷移先。
+  failed: ["running", "pending", "in_review", "merged", "done_no_pr", "skipped"],
   merged: [],
   done_no_pr: [], // 終端（PR なし完了）
   skipped: [],
@@ -176,6 +177,11 @@ export type PbiRunnerRequest =
   | {
       id: string;
       method: "pbi.skipTask";
+      params: { pbiId: string; key: string };
+    }
+  | {
+      id: string;
+      method: "pbi.markTaskDone";
       params: { pbiId: string; key: string };
     }
   | { id: string; method: "pbi.cancel"; params: { pbiId: string } }
