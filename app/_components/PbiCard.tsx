@@ -1,7 +1,7 @@
 // app/_components/PbiCard.tsx
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { Job } from "@/lib/jobs/types";
 import type { PbiJob } from "@/lib/pbi/types";
 import { SubTaskRow } from "./SubTaskRow";
@@ -31,7 +31,11 @@ async function postAction(path: string, body?: unknown): Promise<string | null> 
 }
 
 export function PbiCard({ pbi, jobsById }: { pbi: PbiJob; jobsById: Map<string, Job> }) {
-  const { isBusy: busy, run: runGuarded } = useInFlightAction();
+  // 成功時はガードを保持し（ボタンを押せないまま保つ）、ポーリングで pbi.status /
+  // pbi.paused の変化を検知するまで再有効化しない。失敗時のみ即解除する。
+  const { isBusy: busy, run: runGuarded, reset } = useInFlightAction({
+    keepInFlightOnSuccess: true,
+  });
   const [error, setError] = useState<string | null>(null);
   const [feedback, setFeedback] = useState("");
 
@@ -42,6 +46,12 @@ export function PbiCard({ pbi, jobsById }: { pbi: PbiJob; jobsById: Map<string, 
       setError(err);
       return err === null;
     });
+
+  // approve / revise / reject / pause / resume / cancel はいずれも成功すると
+  // ポーリングで pbi.status か pbi.paused が変化する。その変化を検知したらガードを解除。
+  useEffect(() => {
+    reset();
+  }, [pbi.status, pbi.paused, reset]);
 
   const mergedCount = pbi.subTasks.filter((t) => ["merged", "done_no_pr", "skipped"].includes(t.state)).length;
   const terminal = ["completed", "failed", "cancelled"].includes(pbi.status);

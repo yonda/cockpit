@@ -42,6 +42,12 @@ export type UseInFlightAction<T> = {
    * @param token busy state に載せる識別子。省略時は `true` 相当。
    */
   readonly run: (action: () => Promise<boolean>, token?: T) => Promise<void>;
+  /**
+   * ガードを外部から手動解除する。`keepInFlightOnSuccess: true` で成功後もガードを
+   * 保持しているとき、ポーリングで状態変化を検知した呼び出し側が再有効化するために使う。
+   * `action` を await 中（fetch 実行中）は何もしない — 発射中の二重発火窓を再び開かないため。
+   */
+  readonly reset: () => void;
 };
 
 export function useInFlightAction<T = true>(
@@ -50,6 +56,9 @@ export function useInFlightAction<T = true>(
   const { keepInFlightOnSuccess = false } = options;
   // 同期ガード：レンダーをまたがず即座に読み書きでき、連打の競合窓を閉じる。
   const inFlightRef = useRef(false);
+  // action（＝ fetch）を await している最中だけ true。reset がこの窓で解除して
+  // 発射中の二重発火窓を開いてしまうのを防ぐためのフラグ。
+  const runningRef = useRef(false);
   // 表示用：disabled やボタン文言の切り替えに使う（更新は非同期でよい）。
   const [busy, setBusy] = useState<T | null>(null);
 
@@ -58,12 +67,14 @@ export function useInFlightAction<T = true>(
       // 先頭で同期チェック・同期セット。ここを通れるのは同一フレームで最初の 1 回だけ。
       if (inFlightRef.current) return;
       inFlightRef.current = true;
+      runningRef.current = true;
       setBusy(token);
 
       let ok = false;
       try {
         ok = await action();
       } finally {
+        runningRef.current = false;
         // 失敗時は常に解除。成功時は keepInFlightOnSuccess=false のときだけ解除する。
         if (!ok || !keepInFlightOnSuccess) {
           inFlightRef.current = false;
@@ -74,5 +85,12 @@ export function useInFlightAction<T = true>(
     [keepInFlightOnSuccess],
   );
 
-  return { busy, isBusy: busy !== null, run };
+  const reset = useCallback(() => {
+    // fetch 実行中の解除は二重発火窓を開くので無視。成功後の保持状態のみ解除する。
+    if (runningRef.current) return;
+    inFlightRef.current = false;
+    setBusy(null);
+  }, []);
+
+  return { busy, isBusy: busy !== null, run, reset };
 }

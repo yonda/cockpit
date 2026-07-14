@@ -1,7 +1,7 @@
 // app/_components/SubTaskRow.tsx
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { Job } from "@/lib/jobs/types";
 import type { PbiEscalation, SubTaskRecord } from "@/lib/pbi/types";
 import { PendingInputPanel } from "./PendingInputPanel";
@@ -28,12 +28,23 @@ export function SubTaskRow({
   job: Job | undefined;
   escalations: PbiEscalation[];
 }) {
-  const { isBusy: busy, run: runGuarded } = useInFlightAction();
+  // 成功時はガードを保持し、ポーリングで結果が反映されるまで再有効化しない。
+  // 失敗時のみ即解除する。
+  const { isBusy: busy, run: runGuarded, reset } = useInFlightAction({
+    keepInFlightOnSuccess: true,
+  });
   const [error, setError] = useState<string | null>(null);
   const badge = stateBadge[task.state];
   const hasReviewComments = escalations.some(
     (e) => e.kind === "review_comments" && e.subTaskKey === task.key,
   );
+
+  // retry / skip / done は task.state が、review-reply は task.state を変えず
+  // task.jobId を付け替えることで検知する。review_comments エスカレーションの
+  // 消化（hasReviewComments の変化）も解除トリガに含める。
+  useEffect(() => {
+    reset();
+  }, [task.state, task.jobId, hasReviewComments, reset]);
 
   const act = (path: string) =>
     runGuarded(async () => {
