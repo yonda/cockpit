@@ -1,5 +1,7 @@
 # Seatbelt (sandbox) PoC 実測メモ (Issue #36)
 
+> **⚠️ Superseded (2026-07-14, #148)** — runner 中心の実行アーキテクチャは [issue-driver 転換](https://github.com/yonda/cockpit/issues/148) で退役しました（runner コードは #149 で削除）。本メモは当時の検証記録として残します。sandbox（統一プロファイルの Seatbelt）自体は土台として存続します。
+
 t2 (runner への SandboxSettings 導入) の実装前に潰すべき 4 つの要注意ポイント
 (gh の TLS / autoAllowBashIfSandboxed と canUseTool の評価順 / pnpm install の
 egress / failIfUnavailable) を、使い捨て PoC ハーネスで macOS 実機実測した記録。
