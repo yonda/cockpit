@@ -161,29 +161,115 @@ describe("RealGitHubClient.prStateForBranch", () => {
     expect(commands.calls).toHaveLength(1);
   });
 
-  it("maps an open PR, fetching review-thread count via graphql", async () => {
-    const commands = new FakeCommands();
+  /** OPEN PR: list -> graphql(reviewThreads) -> pr view(mergeable) の 3 応答を積む */
+  const pushOpenResponses = (
+    commands: FakeCommands,
+    opts: { reviewCount?: number; mergeableJson?: unknown } = {},
+  ) => {
     commands.responses.push({
       stdout: JSON.stringify([
         { url: "https://github.com/yonda/cockpit/pull/9", state: "OPEN", number: 9 },
       ]),
       stderr: "",
     });
-    // 2 回目の呼び出し: gh api graphql で reviewThreads.totalCount
     commands.responses.push({
       stdout: JSON.stringify({
-        data: { repository: { pullRequest: { reviewThreads: { totalCount: 3 } } } },
+        data: {
+          repository: {
+            pullRequest: { reviewThreads: { totalCount: opts.reviewCount ?? 3 } },
+          },
+        },
       }),
       stderr: "",
     });
+    commands.responses.push({
+      stdout:
+        opts.mergeableJson === undefined
+          ? JSON.stringify({ mergeable: "MERGEABLE", mergeStateStatus: "CLEAN" })
+          : JSON.stringify(opts.mergeableJson),
+      stderr: "",
+    });
+  };
+
+  it("maps an open PR, fetching review-thread count via graphql and mergeable via pr view", async () => {
+    const commands = new FakeCommands();
+    pushOpenResponses(commands);
     expect(await gh(commands).prStateForBranch("r", "feature/1-x")).toEqual({
       kind: "open",
       url: "https://github.com/yonda/cockpit/pull/9",
       reviewCommentCount: 3,
+      mergeable: "MERGEABLE",
     });
     // OPEN のみ graphql を叩く
     expect(commands.calls[1].args).toContain("graphql");
     expect(commands.calls[1].args.join(" ")).toContain("reviewThreads");
+    // 3 回目: gh pr view で mergeable/mergeStateStatus を取得
+    const mergeArgs = commands.calls[2].args.join(" ");
+    expect(commands.calls[2].args).toContain("pr");
+    expect(commands.calls[2].args).toContain("view");
+    expect(mergeArgs).toContain("mergeable,mergeStateStatus");
+  });
+
+  it("normalizes mergeStateStatus=DIRTY to CONFLICTING", async () => {
+    const commands = new FakeCommands();
+    pushOpenResponses(commands, {
+      mergeableJson: { mergeable: "UNKNOWN", mergeStateStatus: "DIRTY" },
+    });
+    const res = await gh(commands).prStateForBranch("r", "feature/1-x");
+    expect(res).toMatchObject({ kind: "open", mergeable: "CONFLICTING" });
+  });
+
+  it("normalizes mergeable=CONFLICTING to CONFLICTING", async () => {
+    const commands = new FakeCommands();
+    pushOpenResponses(commands, {
+      mergeableJson: { mergeable: "CONFLICTING", mergeStateStatus: "UNKNOWN" },
+    });
+    const res = await gh(commands).prStateForBranch("r", "feature/1-x");
+    expect(res).toMatchObject({ kind: "open", mergeable: "CONFLICTING" });
+  });
+
+  it("normalizes mergeable=UNKNOWN (still computing) to UNKNOWN", async () => {
+    const commands = new FakeCommands();
+    pushOpenResponses(commands, {
+      mergeableJson: { mergeable: "UNKNOWN", mergeStateStatus: "UNKNOWN" },
+    });
+    const res = await gh(commands).prStateForBranch("r", "feature/1-x");
+    expect(res).toMatchObject({ kind: "open", mergeable: "UNKNOWN" });
+  });
+
+  it("normalizes a clean PR to MERGEABLE", async () => {
+    const commands = new FakeCommands();
+    pushOpenResponses(commands, {
+      mergeableJson: { mergeable: "MERGEABLE", mergeStateStatus: "CLEAN" },
+    });
+    const res = await gh(commands).prStateForBranch("r", "feature/1-x");
+    expect(res).toMatchObject({ kind: "open", mergeable: "MERGEABLE" });
+  });
+
+  it("falls back to UNKNOWN when the mergeable fetch fails (invalid JSON)", async () => {
+    const commands = new FakeCommands();
+    // list + graphql は正常、pr view は空文字を返し JSON.parse で失敗させる
+    commands.responses.push({
+      stdout: JSON.stringify([
+        { url: "https://github.com/yonda/cockpit/pull/9", state: "OPEN", number: 9 },
+      ]),
+      stderr: "",
+    });
+    commands.responses.push({
+      stdout: JSON.stringify({
+        data: { repository: { pullRequest: { reviewThreads: { totalCount: 0 } } } },
+      }),
+      stderr: "",
+    });
+    commands.responses.push({ stdout: "not json", stderr: "" });
+    const res = await gh(commands).prStateForBranch("r", "feature/1-x");
+    // mergeable 取得に失敗しても throw せず open 情報自体は返す
+    expect(res).toEqual({
+      kind: "open",
+      url: "https://github.com/yonda/cockpit/pull/9",
+      reviewCommentCount: 0,
+      mergeable: "UNKNOWN",
+    });
   });
 
   it("maps a closed PR", async () => {

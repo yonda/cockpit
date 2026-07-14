@@ -150,6 +150,7 @@ describe("dispatchReady 発射前ガード", () => {
         kind: "open",
         url: "https://github.com/yonda/cockpit/pull/9",
         reviewCommentCount: 0,
+        mergeable: "MERGEABLE",
       }),
     });
 

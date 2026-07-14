@@ -2,9 +2,17 @@ import type { CommandRunner } from "./exec";
 import { SUBTASK_MARKER, type SubTask } from "../lib/pbi/types";
 import type { AssignedIssue } from "../lib/repos/types";
 
+/**
+ * open な PR のマージ可能性。GitHub GraphQL の MergeableState をそのまま採る。
+ * - MERGEABLE: コンフリクトなくマージできる
+ * - CONFLICTING: コンフリクトしていてマージできない
+ * - UNKNOWN: GitHub が背後でマージ可能性を計算中 (まだ確定していない)
+ */
+export type Mergeable = "MERGEABLE" | "CONFLICTING" | "UNKNOWN";
+
 export type PrState =
   | { kind: "none" }
-  | { kind: "open"; url: string; reviewCommentCount: number }
+  | { kind: "open"; url: string; reviewCommentCount: number; mergeable: Mergeable }
   | { kind: "merged"; url: string }
   | { kind: "closed"; url: string };
 
@@ -182,7 +190,49 @@ export class RealGitHubClient implements GitHubClient {
       kind: "open",
       url: pr.url,
       reviewCommentCount: await this.reviewThreadCount(repo, pr.number),
+      mergeable: await this.mergeableForPr(repo, pr.number),
     };
+  }
+
+  /**
+   * OPEN な PR のマージ可能性を取得して正規化する (取得失敗時は UNKNOWN)。
+   *
+   * gh pr view の JSON フィールド仕様 (一次情報で確認):
+   * - `mergeable` は GraphQL の MergeableState で MERGEABLE / CONFLICTING / UNKNOWN。
+   *   UNKNOWN は GitHub がマージ可能性を背後で計算中の状態
+   *   (REST の mergeable=null と同義: "GitHub has started a background job
+   *   to compute the mergeability")。
+   * - `mergeStateStatus` の DIRTY は「マージコミットをクリーンに作成できない」=
+   *   コンフリクト状態を表す。
+   *
+   * 判定順 (誤検知を避けるため CONFLICTING を最優先):
+   * 1. mergeStateStatus=DIRTY もしくは mergeable=CONFLICTING → CONFLICTING
+   * 2. mergeable=UNKNOWN (計算中) → UNKNOWN
+   * 3. それ以外 → MERGEABLE
+   */
+  private async mergeableForPr(repo: string, number: number): Promise<Mergeable> {
+    try {
+      const { stdout } = await this.gh(repo, [
+        "pr",
+        "view",
+        String(number),
+        "--repo",
+        repo,
+        "--json",
+        "mergeable,mergeStateStatus",
+      ]);
+      const parsed = JSON.parse(stdout) as {
+        mergeable?: string;
+        mergeStateStatus?: string;
+      };
+      if (parsed.mergeStateStatus === "DIRTY" || parsed.mergeable === "CONFLICTING") {
+        return "CONFLICTING";
+      }
+      if (parsed.mergeable === "UNKNOWN") return "UNKNOWN";
+      return "MERGEABLE";
+    } catch {
+      return "UNKNOWN";
+    }
   }
 
   /** OPEN な PR のレビュースレッド数を GraphQL で取得する (失敗時は 0)。 */
