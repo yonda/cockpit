@@ -25,10 +25,14 @@ description: Use when you are handed a single GitHub issue and asked to drive it
 
 ## フロー
 
+**進捗ファイルは各フェーズの必須ステップ**：以下の各ステップは末尾の「**→ 進捗ファイル**」で終わる。これは事後のブックキーピングではなく、cockpit がリアルタイムに状況（今どこ・詰まっているか）を見るための本質。実装に没入して書き忘れると観測契約が空洞化し、最後に done を一括生成するだけになる。各ステップの「→ 進捗ファイル」を**必ずその場で実行**すること（§進捗ファイル）。
+
+**作業環境**：コード変更は worktree で行う（メインリポで直接作業しない）。worktree の作成・依存インストールは**ホスト/リポの規約（`CLAUDE.md`・パッケージマネージャ）に従う**。skill 側で特定コマンド（`git worktree add` / `git wt` / `npm` / `pnpm` 等）は指定しない——環境ごとに正しい手段が違う。フックの失敗などは規約側の既知事情の場合があるので、worktree ができていれば止めずにリカバリして進む。
+
 ### 1. 理解
 - issue 本文・関連コード・リポジトリ規約（`AGENTS.md` / `CLAUDE.md` 等）を読む。**規約は必ず守る**（例：特定フレームワークの独自版なら該当 docs を先に読め、等）。
 - 仕様が「本当に詰まる」ほど曖昧なら → エスカレーション条件1。そうでなければ**解釈を自分で確定**して進む。
-- 進捗ファイルを初期化（§進捗ファイル）。`phase: "understanding"`。
+- **→ 進捗ファイル**：初期化して `phase: "understanding"`、ノードを最低1個（issue 自身）作る。
 
 ### 2. 規模判断
 - **小（単一の一貫した変更・1〜数ファイル・明確仕様）** → 分解せずソロで進む（ノード1個）。
@@ -43,12 +47,15 @@ description: Use when you are handed a single GitHub issue and asked to drive it
 - **マージゲート**：`dependsOn` が非空のノードは、**依存先の PR がマージされるまで teammate を起動しない**（`liveStatus: "queued"` で待機）。未マージの依存コードを前提に並行実装すると、コンフリクト・ビルド破壊を招く。依存の無いサブタスクから **teammate を立てて**割り当てる（§teammates）。lead（あなた）は依存の解決・統合・レビューを担う。
 
 ### 4. 実装
+- **→ 進捗ファイル**：着手時に `phase: "implementing"`、対象ノードを `liveStatus: "implementing"` に。
 - TDD と規約に沿って実装。**実装判断は全部自分で**。
 - 小：あなた自身が実装。大：各 teammate が担当サブタスクを実装し、完了ごとに lead がレビュー。
-- 進捗ファイルの該当ノードを随時更新（`liveStatus`, `activity`）。
+- **→ 進捗ファイル**：意味のある進展のたびに対象ノードの `activity` を1行更新（cockpit がここを見て「今なにをしているか」を表示する）。書き忘れると cockpit からは実装フェーズが空白に見える。
 
 ### 5. セルフレビュー（superpowers 非依存・内蔵）
-まず **実行ゲート**：PR を出す前に、リポジトリの規約（README / CLAUDE.md 記載のコマンド）に従い **typecheck / lint / test / build を実際に実行して green を確認する**。落ちていれば直す。直せない場合はエスカレーション条件3として扱う。観点レビューだけで実行検証を省いて PR を出してはいけない。
+- **→ 進捗ファイル**：`phase: "reviewing"`、対象ノードを `liveStatus: "reviewing"` に。
+
+まず **実行ゲート**：PR を出す前に、リポジトリの規約（README / CLAUDE.md 記載のコマンド）に従い **typecheck / lint / test / build を実際に実行して green を確認する**。**実行ゲートは変更内容にスケールさせる**——型・純ロジックのみの変更なら `typecheck`（`tsc` 等）＋該当 `test`、フレームワーク/ビルドに影響する変更なら `build` まで回す。関係するチェックは省かず、関係しないチェックは無理に回さない。落ちていれば直す。直せない場合はエスカレーション条件3として扱う。観点レビューだけで実行検証を省いて PR を出してはいけない。
 
 その上で、自分の変更を次の観点で**自分で**通し、指摘をトリアージする：
 - **バグ・正しさ**：エッジケース・エラー処理・並行性・境界値
@@ -59,7 +66,7 @@ description: Use when you are handed a single GitHub issue and asked to drive it
 
 ### 6. 完走
 - draft PR を作成（`gh pr create --draft`、issue を参照）。見送った指摘・要判断点を PR 本文に明示。
-- 進捗ファイルを最終状態へ（`phase: "done"`、該当ノードに `prNumber`）。
+- **→ 進捗ファイル**：最終状態へ（`phase: "done"`、該当ノードを `liveStatus: "handed_off"` ＋ `prNumber`）。
 - 人間に成果物を提示して**停止**。マージはしない。
 
 ## 進捗ファイル（観測契約）
