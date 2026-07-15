@@ -61,4 +61,21 @@ export type Tier = "now" | "soon" | "waiting";
 
 export type CardOrigin = "mine" | "review";
 
+/** issue-driver 進捗ノードが参照する sub-issue の、GitHub 上の確定状態 */
+export type GhIssueState = {
+  number: number;
+  state: "OPEN" | "CLOSED";
+  url: string;
+};
+
+/** issue-driver 進捗ノードが参照する PR の、GitHub 上の確定状態 */
+export type GhPullRequestState = {
+  number: number;
+  state: "OPEN" | "CLOSED" | "MERGED";
+  isDraft: boolean;
+  mergeable: Mergeable;
+  reviewDecision: ReviewDecision;
+  url: string;
+};
+
 

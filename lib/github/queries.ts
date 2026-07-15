@@ -105,6 +105,32 @@ export function buildRepoScope(org: string): string {
   return `archived:false org:${org} user:@me`;
 }
 
+/**
+ * issue-driver 進捗ファイルのノードが参照する issue/PR 番号をまとめて1リクエストで取る
+ * バッチクエリ。GraphQL エイリアス(i<N>/p<N>)で番号ごとに結果を分ける。
+ * 番号は progress.ts の assertNumber を通った number のみが渡る想定で、文字列連結でも
+ * インジェクションの余地はない(GraphQL 変数化はエイリアスには使えないため)。
+ */
+export function buildRunStateQuery(issueNumbers: number[], prNumbers: number[]): string {
+  const issueFields = issueNumbers
+    .map((n) => `i${n}: issue(number: ${n}) { number state url }`)
+    .join("\n");
+  const prFields = prNumbers
+    .map(
+      (n) =>
+        `p${n}: pullRequest(number: ${n}) { number state isDraft mergeable reviewDecision url }`,
+    )
+    .join("\n");
+  return /* GraphQL */ `
+    query RunState($owner: String!, $name: String!) {
+      repository(owner: $owner, name: $name) {
+        ${issueFields}
+        ${prFields}
+      }
+    }
+  `;
+}
+
 export function buildSearchQuery(
   role: "review-requested" | "author" | "reviewed-by",
   org: string,
