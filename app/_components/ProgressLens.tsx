@@ -36,8 +36,13 @@ export async function ProgressLens() {
     return <EmptyState message="no active issue-driver runs" />;
   }
 
+  // done かつ escalation なしの run だけを折りたたみ対象にする。
+  // エスカレーション中の run は phase が "done" であっても進行中側で目立たせ続ける。
+  const inProgress = joined.filter((run) => run.phase !== "done" || hasEscalation(run));
+  const done = joined.filter((run) => run.phase === "done" && !hasEscalation(run));
+
   // escalated な run を最上位に(= WezTerm を覗くべき理由がある run から見える)
-  const sorted = [...joined].sort((a, b) => Number(hasEscalation(b)) - Number(hasEscalation(a)));
+  const sorted = [...inProgress].sort((a, b) => Number(hasEscalation(b)) - Number(hasEscalation(a)));
 
   return (
     <div className="flex flex-col gap-6">
@@ -49,7 +54,26 @@ export async function ProgressLens() {
       {sorted.map((run) => (
         <RunCard key={`${run.repo}#${run.issueNumber}`} run={run} />
       ))}
+      {done.length > 0 ? <DoneSection runs={done} /> : null}
     </div>
+  );
+}
+
+// 完了(done)の run をまとめる折りたたみセクション。ネイティブ <details> でトグルを実装し、
+// クライアント JS なしで開閉できるようにする。
+function DoneSection({ runs }: { runs: JoinedProgressFile[] }) {
+  return (
+    <details className="group border border-[var(--hairline)] px-5 py-4">
+      <summary className="flex cursor-pointer list-none items-center gap-2 font-mono-caps text-[11px] text-[var(--ink-muted)] transition hover:text-[var(--ink)] [&::-webkit-details-marker]:hidden">
+        <span className="transition group-open:rotate-90">▶</span>
+        完了 ({runs.length})
+      </summary>
+      <div className="mt-4 flex flex-col gap-6">
+        {runs.map((run) => (
+          <RunCard key={`${run.repo}#${run.issueNumber}`} run={run} />
+        ))}
+      </div>
+    </details>
   );
 }
 
