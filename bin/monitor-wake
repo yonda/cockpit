@@ -1,0 +1,197 @@
+#!/usr/bin/env python3
+"""issue-driver の phase:monitoring な run を定期的に wake する executor (#168)。
+
+launchd (com.cockpit.monitor) から一定間隔で実行される想定。監視ループの
+「起こす主体」がいない gap を埋める (issue-driver は draft PR を出して monitoring に
+入ったあと、自分では起きられない)。
+
+方針は「つつく主・立て直し保険」:
+  - 対象 (phase:monitoring) は cockpit の /api/wake-targets から取る
+    (lib/runs の list 層 + wake 層を再利用。Next プロセスは child_process を
+     使えない Turbopack 制約があるので、副作用はこの外部 executor が担う)。
+  - 担当セッションが「生きていれば」agmsg で1通つついて監視ループを1周回させる。
+    生死判定は agmsg の ready sentinel (live watcher が受信中のとき present)。
+  - 「死んでいたら」立て直す (herdr agent start)。ただし無人 spawn は影響が大きいので
+    COCKPIT_WAKE_RESPAWN=1 のときだけ実行し、既定では stuck をログに出すだけ (安全側)。
+
+安全既定: 引数なしは --dry-run (何もしない・計画だけ表示)。launchd は --apply を渡す。
+システム python3 + 標準ライブラリのみで動くこと (launchd の PATH は最小)。
+"""
+
+import json
+import os
+import signal
+import subprocess
+import sys
+import urllib.request
+from datetime import datetime, timezone
+
+# stdout がパイプ先(例: `| head`)に途中で閉じられても Python の traceback を出さず
+# 静かに終わる。launchd はファイルに書くので実運用では起きないが、手動デバッグ用。
+signal.signal(signal.SIGPIPE, signal.SIG_DFL)
+
+HOME = os.path.expanduser("~")
+AGMSG_DIR = os.path.join(HOME, ".agents", "skills", "agmsg")
+SEND_SH = os.path.join(AGMSG_DIR, "scripts", "send.sh")
+ACTAS_LIB = os.path.join(AGMSG_DIR, "scripts", "lib", "actas-lock.sh")
+WAKER_NAME = "cockpit-waker"
+
+POKE_BODY = (
+    "[cockpit wake] issue {url} の監視ループを1周だけ reconcile してください。"
+    "GitHub を見て (1) マージされた PR があれば stacked 依存 PR の base を main に"
+    "付け替え・依存サブタスクを発火 (2) 新しいレビューコメントがあればコードで対応→push "
+    "(3) 全 PR マージ済みなら phase:done。進捗ファイルを更新したら待機に戻ってください。"
+    "ホットループにはせず、この1周だけ回すこと。"
+)
+
+
+def log(msg: str) -> None:
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    print(f"{ts} {msg}", flush=True)
+
+
+def read_port() -> int:
+    """PORT を env → .env.local → 既定 7878 の順で解決する (bin/start と揃える)。"""
+    if os.environ.get("PORT"):
+        try:
+            return int(os.environ["PORT"])
+        except ValueError:
+            pass
+    env_local = os.path.join(_project_dir(), ".env.local")
+    try:
+        with open(env_local, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith("PORT="):
+                    return int(line.split("=", 1)[1].strip())
+    except (OSError, ValueError):
+        pass
+    return 7878
+
+
+def _project_dir() -> str:
+    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def fetch_targets(port: int) -> list[dict]:
+    url = f"http://127.0.0.1:{port}/api/wake-targets"
+    with urllib.request.urlopen(url, timeout=15) as resp:
+        data = json.load(resp)
+    return data.get("targets", [])
+
+
+def ready_sentinel_path(team: str, agent: str) -> str | None:
+    """agmsg の ready sentinel パスを agmsg 自身のエンコーダで求める。
+
+    ハードコードせず lib を source して呼ぶことで、agmsg 側のエンコード規則が
+    変わっても追随する (誤判定で live なセッションを二重起動しないため)。
+    """
+    script = (
+        f'SKILL_DIR="{AGMSG_DIR}"; '
+        f'source "{ACTAS_LIB}" >/dev/null 2>&1 || exit 1; '
+        'agmsg_ready_path "$1" "$2"'
+    )
+    try:
+        out = subprocess.run(
+            ["bash", "-c", script, "_", team, agent],
+            capture_output=True, text=True, timeout=10, check=True,
+        ).stdout.strip()
+        return out or None
+    except (subprocess.SubprocessError, OSError):
+        return None
+
+
+def liveness(session: dict | None) -> str:
+    """担当セッションの状態を判定する。
+
+    - "alive"      : agmsg 連絡先があり ready sentinel が present → つつく
+    - "dead"       : 連絡先が無い / 連絡先はあるが sentinel が absent → 立て直す(保険)
+    - "unknown"    : sentinel パスの算出に失敗(transient) → 触らず次 tick に再評価
+
+    連絡先未記録(#164 の一発 subagent 等)は「つつけない＝生きた担当がいない」ので
+    dead 扱いにし、保険(立て直し/可視化)へ回す。skip して静かに詰まらせない。
+    """
+    team = (session or {}).get("agmsgTeam")
+    agent = (session or {}).get("agmsgAgent")
+    if not team or not agent:
+        return "dead"
+    path = ready_sentinel_path(team, agent)
+    if path is None:
+        return "unknown"
+    return "alive" if os.path.exists(path) else "dead"
+
+
+def poke(session: dict, url: str, apply: bool) -> None:
+    team, agent = session["agmsgTeam"], session["agmsgAgent"]
+    body = POKE_BODY.format(url=url)
+    if not apply:
+        log(f"  DRY-RUN would poke agmsg {team}/{agent}")
+        return
+    subprocess.run(
+        ["bash", SEND_SH, team, WAKER_NAME, agent, body],
+        capture_output=True, text=True, timeout=20, check=True,
+    )
+    log(f"  poked agmsg {team}/{agent}")
+
+
+def respawn(session: dict | None, url: str, apply: bool) -> None:
+    """死んだ担当を立て直す (保険)。無人 spawn は影響大なので既定 OFF。"""
+    enabled = os.environ.get("COCKPIT_WAKE_RESPAWN") == "1"
+    cwd = (session or {}).get("cwd")
+    if not enabled:
+        log(f"  STUCK dead session, respawn disabled (set COCKPIT_WAKE_RESPAWN=1). url={url}")
+        return
+    if not cwd or not os.path.isdir(cwd):
+        log(f"  STUCK dead session, cannot respawn (worktree cwd 不明/不在): {cwd!r}")
+        return
+    if not apply:
+        log(f"  DRY-RUN would respawn issue-driver in {cwd}")
+        return
+    # herdr の現ワークスペースに interactive な Claude Code を立て、agmsg に自動 join する
+    # `ca` を起動 → /issue-driver を投入。best-effort (herdr サーバ到達前提)。
+    name = f"issuedriver-{url.rstrip('/').split('/')[-1]}"
+    try:
+        subprocess.run(
+            ["herdr", "agent", "start", name, "--cwd", cwd, "--no-focus",
+             "--", "zsh", "-ic", f"cd {cwd} && ca && sleep 3 && /issue-driver {url}"],
+            capture_output=True, text=True, timeout=60, check=True,
+        )
+        log(f"  respawned issue-driver ({name}) in {cwd}")
+    except (subprocess.SubprocessError, OSError) as e:
+        log(f"  STUCK respawn failed: {e}")
+
+
+def main(argv: list[str]) -> int:
+    apply = "--apply" in argv[1:]
+    mode = "APPLY" if apply else "DRY-RUN (pass --apply to act)"
+    port = read_port()
+    log(f"monitor-wake start [{mode}] port={port}")
+
+    try:
+        targets = fetch_targets(port)
+    except Exception as e:  # noqa: BLE001 - cockpit 未起動等でも静かに諦める
+        log(f"could not fetch targets from cockpit (:{port}): {e}")
+        return 0
+
+    if not targets:
+        log("no phase:monitoring runs. nothing to wake.")
+        return 0
+
+    for t in targets:
+        num, url = t.get("issueNumber"), t.get("issueUrl")
+        session = t.get("session")
+        state = liveness(session)
+        log(f"#{num} {t.get('repo')} session={state}")
+        if state == "alive":
+            poke(session, url, apply)
+        elif state == "dead":
+            respawn(session, url, apply)
+        else:  # unknown (transient): 触らず次 tick に再評価
+            log("  skip (生死判定 transient 失敗): 次の tick で再評価")
+
+    log("monitor-wake done")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

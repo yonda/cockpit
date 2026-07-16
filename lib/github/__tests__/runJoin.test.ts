@@ -17,6 +17,7 @@ function makeFile(overrides: Partial<ProgressFile> = {}): ProgressFile {
     phase: "implementing",
     updatedAt: "2026-07-15T00:00:00Z",
     escalation: null,
+    session: null,
     nodes: [
       {
         key: "t1",

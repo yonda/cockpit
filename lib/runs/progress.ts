@@ -36,6 +36,23 @@ export type ProgressEscalation = {
   at: string;
 };
 
+/**
+ * monitoring に入った issue-driver(lead)の「担当セッションの連絡先」。
+ * cockpit の wake 機構(#168)が「生きていれば つつく／死んでいたら 立て直す」を
+ * 判断するために使う。GitHub 権威の事実ではなく、ライブ層(セッションの所在)を指す。
+ *
+ * - agmsgTeam / agmsgAgent: つつく(agmsg send)先。生死判定(ready sentinel)にも使う。
+ * - herdrPane: herdr 上のペイン/エージェント target(生死判定・立て直しの配置に使う)。
+ * - cwd: 立て直し時に使う worktree の絶対パス。
+ * どれも不明なら null。
+ */
+export type ProgressSession = {
+  agmsgTeam: string | null;
+  agmsgAgent: string | null;
+  herdrPane: string | null;
+  cwd: string | null;
+};
+
 export type ProgressNode = {
   key: string;
   title: string;
@@ -58,6 +75,8 @@ export type ProgressFile = {
   phase: ProgressPhase;
   updatedAt: string;
   escalation: ProgressEscalation | null;
+  /** 担当セッションの連絡先(wake 機構用)。無ければ null。#168 で追加。 */
+  session: ProgressSession | null;
   nodes: ProgressNode[];
 };
 
@@ -136,6 +155,22 @@ function parseEscalation(value: unknown, path: string): ProgressEscalation | nul
   };
 }
 
+function assertNullableString(value: unknown, path: string): string | null {
+  if (value === undefined || value === null) return null;
+  return assertString(value, path);
+}
+
+function parseSession(value: unknown, path: string): ProgressSession | null {
+  if (value === undefined || value === null) return null;
+  const obj = assertRecord(value, path);
+  return {
+    agmsgTeam: assertNullableString(obj.agmsgTeam, `${path}.agmsgTeam`),
+    agmsgAgent: assertNullableString(obj.agmsgAgent, `${path}.agmsgAgent`),
+    herdrPane: assertNullableString(obj.herdrPane, `${path}.herdrPane`),
+    cwd: assertNullableString(obj.cwd, `${path}.cwd`),
+  };
+}
+
 function parseNode(value: unknown, path: string): ProgressNode {
   const obj = assertRecord(value, path);
   const node: ProgressNode = {
@@ -176,6 +211,7 @@ export function parseProgress(json: string): ProgressFile {
     phase: assertEnum(obj.phase, PHASES, "$.phase"),
     updatedAt: assertString(obj.updatedAt, "$.updatedAt"),
     escalation: parseEscalation(obj.escalation ?? null, "$.escalation"),
+    session: parseSession(obj.session ?? null, "$.session"),
     nodes: nodesRaw.map((n, i) => parseNode(n, `$.nodes[${i}]`)),
   };
 }

@@ -5,10 +5,13 @@ cd "$(dirname "$0")/.."
 
 LABEL="com.cockpit.app"
 CAL_LABEL="com.cockpit.calendar"
+MONITOR_LABEL="com.cockpit.monitor"
 PLIST_TEMPLATE="services/cockpit.plist.template"
 CAL_PLIST_TEMPLATE="services/cockpit-calendar.plist.template"
+MONITOR_PLIST_TEMPLATE="services/cockpit-monitor.plist.template"
 PLIST_DEST="$HOME/Library/LaunchAgents/${LABEL}.plist"
 CAL_PLIST_DEST="$HOME/Library/LaunchAgents/${CAL_LABEL}.plist"
+MONITOR_PLIST_DEST="$HOME/Library/LaunchAgents/${MONITOR_LABEL}.plist"
 PROJECT_DIR="$(pwd -P)"
 DOMAIN_TARGET="gui/$(id -u)"
 
@@ -26,8 +29,12 @@ Commands:
   calendar-install    calendar-sync エージェントを launchd に登録する
   calendar-uninstall  calendar-sync エージェントを launchd から外す
   calendar-status     calendar-sync エージェントの登録状態を表示
+  monitor-install     issue-driver wake エージェント(#168)を launchd に登録する
+  monitor-uninstall   issue-driver wake エージェントを launchd から外す
+  monitor-status      issue-driver wake エージェントの登録状態を表示
+  monitor-logs        wake エージェントの out ログを tail -f
 
-Label: ${LABEL} / ${CAL_LABEL}
+Label: ${LABEL} / ${CAL_LABEL} / ${MONITOR_LABEL}
 Plist: ${PLIST_DEST}
 EOF
 }
@@ -114,6 +121,15 @@ case "${1:-}" in
                       echo "calendar-sync を launchd に登録しました" ;;
   calendar-uninstall) uninstall_agent "${CAL_LABEL}" "${CAL_PLIST_DEST}" ;;
   calendar-status)    status_agent "${CAL_LABEL}" ;;
+  monitor-install)    mkdir -p "$HOME/.cache/cockpit"
+                      install_agent "${MONITOR_PLIST_TEMPLATE}" "${MONITOR_LABEL}" "${MONITOR_PLIST_DEST}"
+                      echo "issue-driver wake エージェントを launchd に登録しました (600s 間隔)"
+                      echo "立て直し(保険)を有効にするには plist の EnvironmentVariables に COCKPIT_WAKE_RESPAWN=1 を足す" ;;
+  monitor-uninstall)  uninstall_agent "${MONITOR_LABEL}" "${MONITOR_PLIST_DEST}" ;;
+  monitor-status)     status_agent "${MONITOR_LABEL}" ;;
+  monitor-logs)       path="$HOME/.cache/cockpit/monitor-wake.log"
+                      [[ -f "$path" ]] || { echo "no log yet: $path"; exit 0; }
+                      tail -f "$path" ;;
   ""|help|-h|--help)  usage ;;
   *) echo "unknown command: $1" >&2; usage; exit 1 ;;
 esac

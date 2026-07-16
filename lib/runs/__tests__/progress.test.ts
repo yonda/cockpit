@@ -111,6 +111,55 @@ describe("parseProgress", () => {
     };
     expect(() => parseProgress(JSON.stringify(data))).toThrow(/reason/);
   });
+
+  it("session が無いファイルは session=null になる（後方互換）", () => {
+    // 既存の進捗ファイルは session を持たない。cockpit の wake 機構(#168)で
+    // 追加したフィールドなので、欠落時は null にフォールバックする。
+    expect(parseProgress(validJson).session).toBeNull();
+  });
+
+  it("session（担当セッションの連絡先）を持つファイルをパースできる", () => {
+    // monitoring に入った issue-driver が「誰につつけばいいか」を残す連絡先。
+    const data = JSON.parse(validJson);
+    data.phase = "monitoring";
+    data.session = {
+      agmsgTeam: "cockpit",
+      agmsgAgent: "cockpit-G",
+      herdrPane: "wE:p1F",
+      cwd: "/Users/x/src/cockpit-wt/feature/168",
+    };
+    const parsed = parseProgress(JSON.stringify(data));
+    expect(parsed.session).toEqual({
+      agmsgTeam: "cockpit",
+      agmsgAgent: "cockpit-G",
+      herdrPane: "wE:p1F",
+      cwd: "/Users/x/src/cockpit-wt/feature/168",
+    });
+  });
+
+  it("session の欠落フィールドは null で埋める", () => {
+    const data = JSON.parse(validJson);
+    data.session = { agmsgTeam: "cockpit", agmsgAgent: "cockpit-G" };
+    const parsed = parseProgress(JSON.stringify(data));
+    expect(parsed.session).toEqual({
+      agmsgTeam: "cockpit",
+      agmsgAgent: "cockpit-G",
+      herdrPane: null,
+      cwd: null,
+    });
+  });
+
+  it("session が null のファイルもパースできる", () => {
+    const data = JSON.parse(validJson);
+    data.session = null;
+    expect(parseProgress(JSON.stringify(data)).session).toBeNull();
+  });
+
+  it("session.agmsgTeam の不正な型で throw する", () => {
+    const data = JSON.parse(validJson);
+    data.session = { agmsgTeam: 123 };
+    expect(() => parseProgress(JSON.stringify(data))).toThrow(/session\.agmsgTeam/);
+  });
 });
 
 describe("writeProgressAtomic", () => {
@@ -128,6 +177,7 @@ describe("writeProgressAtomic", () => {
     phase: "implementing",
     updatedAt: "2026-07-14T06:00:00Z",
     escalation: null,
+    session: null,
     nodes: [],
   };
 
