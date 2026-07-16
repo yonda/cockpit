@@ -12,6 +12,9 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // gitignored build output (退役した runner の dist/runner.cjs 等が
+    // wt.copyignored で worktree に混入すると lint を汚すため明示除外)。
+    "dist/**",
   ]),
 ]);
 

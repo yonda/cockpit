@@ -1,0 +1,241 @@
+#!/usr/bin/env python3
+"""issue-driver の phase:monitoring な run を定期的に wake する executor (#168)。
+
+launchd (com.cockpit.monitor) から一定間隔で実行される想定。監視ループの
+「起こす主体」がいない gap を埋める (issue-driver は draft PR を出して monitoring に
+入ったあと、自分では起きられない)。
+
+方針は「つつく主・立て直し保険」:
+  - 対象 (phase:monitoring) は cockpit の /api/wake-targets から取る
+    (lib/runs の list 層 + wake 層を再利用。Next プロセスは child_process を
+     使えない Turbopack 制約があるので、副作用はこの外部 executor が担う)。
+  - 担当セッションが「生きていれば」agmsg で1通つついて監視ループを1周回させる。
+    生死判定は agmsg の ready sentinel (live watcher が受信中のとき present)。
+  - 「死んでいたら」(セッション消滅・一発 subagent 等) 進捗ファイルに escalation
+    (赤旗) を立てて cockpit で可視化し、人間/lead に拾ってもらう。無人での自動
+    立て直し (herdr spawn) はこの PR のスコープ外 (別 issue)。赤旗で「静かに詰まる」を防ぐ。
+
+安全既定: 引数なしは --dry-run (何もしない・計画だけ表示)。launchd は --apply を渡す。
+launchd は macOS システム python (/usr/bin/python3 = 3.9) で動くため、3.10+ 構文
+(PEP 604 の X | None を実行時評価する等) を使わないこと。標準ライブラリのみ。
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import signal
+import subprocess
+import sys
+import urllib.request
+from datetime import datetime, timezone
+
+# stdout がパイプ先(例: `| head`)に途中で閉じられても Python の traceback を出さず
+# 静かに終わる。launchd はファイルに書くので実運用では起きないが、手動デバッグ用。
+signal.signal(signal.SIGPIPE, signal.SIG_DFL)
+
+HOME = os.path.expanduser("~")
+AGMSG_DIR = os.path.join(HOME, ".agents", "skills", "agmsg")
+SEND_SH = os.path.join(AGMSG_DIR, "scripts", "send.sh")
+ACTAS_LIB = os.path.join(AGMSG_DIR, "scripts", "lib", "actas-lock.sh")
+RUNS_DIR = os.path.join(HOME, ".cache", "cockpit", "runs")
+WAKER_NAME = "cockpit-waker"
+DEFAULT_PORT = 7878
+
+POKE_BODY = (
+    "[cockpit wake] issue {url} の監視ループを1周だけ reconcile してください。"
+    "GitHub を見て (1) マージされた PR があれば stacked 依存 PR の base を main に"
+    "付け替え・依存サブタスクを発火 (2) 新しいレビューコメントがあればコードで対応→push "
+    "(3) 全 PR マージ済みなら phase:done。進捗ファイルを更新したら待機に戻ってください。"
+    "ホットループにはせず、この1周だけ回すこと。"
+)
+
+STUCK_DETAIL = (
+    "監視ループの担当セッションが消滅している(agmsg ready sentinel 不在 / 連絡先未記録)。"
+    "cockpit は生きた担当をつつけないため自動では進められない。"
+    "人間か lead が issue-driver をこの issue に対して再起動し、監視ループを引き継いでください。"
+)
+
+
+def log(msg):
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    print("{0} {1}".format(ts, msg), flush=True)
+
+
+def _project_dir():
+    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def read_port():
+    """PORT を env(PORT / COCKPIT_WAKE_PORT) → .env.local → 既定 7878 の順で解決する。
+
+    launchd を worktree から install すると .env.local が本番と食い違う恐れがあるため、
+    plist の EnvironmentVariables で COCKPIT_WAKE_PORT を明示できるようにしておく。
+    """
+    for key in ("PORT", "COCKPIT_WAKE_PORT"):
+        val = os.environ.get(key)
+        if val:
+            try:
+                return int(val)
+            except ValueError:
+                pass
+    try:
+        with open(os.path.join(_project_dir(), ".env.local"), encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith("PORT="):
+                    return int(line.split("=", 1)[1].strip())
+    except (OSError, ValueError):
+        pass
+    return DEFAULT_PORT
+
+
+def fetch_targets(port):
+    url = "http://127.0.0.1:{0}/api/wake-targets".format(port)
+    with urllib.request.urlopen(url, timeout=15) as resp:
+        data = json.load(resp)
+    return data.get("targets", [])
+
+
+def ready_sentinel_path(team, agent):
+    """agmsg の ready sentinel パスを agmsg 自身のエンコーダで求める。
+
+    ハードコードせず lib を source して呼ぶことで、agmsg 側のエンコード規則が
+    変わっても追随する (誤判定で live なセッションを二重起動しないため)。失敗時 None。
+    """
+    script = (
+        'SKILL_DIR="{0}"; '.format(AGMSG_DIR)
+        + 'source "{0}" >/dev/null 2>&1 || exit 1; '.format(ACTAS_LIB)
+        + 'agmsg_ready_path "$1" "$2"'
+    )
+    try:
+        out = subprocess.run(
+            ["bash", "-c", script, "_", team, agent],
+            capture_output=True, text=True, timeout=10, check=True,
+        ).stdout.strip()
+        return out or None
+    except (subprocess.SubprocessError, OSError):
+        return None
+
+
+def liveness(session):
+    """担当セッションの状態を判定する。
+
+    - "alive"   : agmsg 連絡先があり ready sentinel が present → つつく
+    - "dead"    : 連絡先が無い / 連絡先はあるが sentinel が absent → 赤旗(保険)
+    - "unknown" : sentinel パスの算出に失敗(transient) → 触らず次 tick に再評価
+
+    連絡先未記録(#164 の一発 subagent 等)は「つつけない＝生きた担当がいない」ので
+    dead 扱いにし、保険(可視化)へ回す。skip して静かに詰まらせない。
+    """
+    session = session or {}
+    team = session.get("agmsgTeam")
+    agent = session.get("agmsgAgent")
+    if not team or not agent:
+        return "dead"
+    path = ready_sentinel_path(team, agent)
+    if path is None:
+        return "unknown"
+    return "alive" if os.path.exists(path) else "dead"
+
+
+def poke(session, url, apply):
+    team, agent = session["agmsgTeam"], session["agmsgAgent"]
+    if not apply:
+        log("  DRY-RUN would poke agmsg {0}/{1}".format(team, agent))
+        return
+    subprocess.run(
+        ["bash", SEND_SH, team, WAKER_NAME, agent, POKE_BODY.format(url=url)],
+        capture_output=True, text=True, timeout=20, check=True,
+    )
+    log("  poked agmsg {0}/{1}".format(team, agent))
+
+
+def progress_path(repo, issue_number):
+    slug = repo.replace("/", "__")
+    return os.path.join(RUNS_DIR, slug, "{0}.json".format(issue_number))
+
+
+def write_atomic(path, data):
+    tmp = "{0}.{1}.tmp".format(path, os.getpid())
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+    os.replace(tmp, path)
+
+
+def escalate_stuck(repo, issue_number, apply):
+    """死んだ担当を可視化する(保険): 進捗ファイルに escalation(赤旗)を立てる。
+
+    冪等: 既に escalation があれば書き換えない(毎 tick の rewrite / 既存の escalation
+    上書きを避ける)。GitHub 権威の事実は触らず、ライブ層の escalation だけを立てる。
+    担当が死んでいる=ファイルの持ち主が不在なので、wake 機構が caretaker として書く。
+    """
+    path = progress_path(repo, issue_number)
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError) as e:
+        log("  STUCK dead session, but progress file unreadable ({0}): {1}".format(path, e))
+        return
+    if data.get("escalation"):
+        log("  STUCK dead session (already flagged, escalation 済)")
+        return
+    if not apply:
+        log("  DRY-RUN would flag escalation(赤旗) on {0}".format(path))
+        return
+    data["escalation"] = {
+        "reason": "blocker",
+        "detail": STUCK_DETAIL,
+        "options": [
+            "この issue に対して issue-driver を再起動し監視ループを引き継ぐ",
+            "残 PR を手動でレビュー・マージして完了させる",
+        ],
+        "recommendation": "issue-driver を再起動して監視ループを引き継ぐ",
+        "at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+    data["updatedAt"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    write_atomic(path, data)
+    log("  STUCK dead session → escalation(赤旗)を立てた: {0}".format(path))
+
+
+def handle(target, apply):
+    num, url = target.get("issueNumber"), target.get("issueUrl")
+    repo, session = target.get("repo"), target.get("session")
+    state = liveness(session)
+    log("#{0} {1} session={2}".format(num, repo, state))
+    if state == "alive":
+        poke(session, url, apply)
+    elif state == "dead":
+        escalate_stuck(repo, num, apply)
+    else:  # unknown (transient): 触らず次 tick に再評価
+        log("  skip (生死判定 transient 失敗): 次の tick で再評価")
+
+
+def main(argv):
+    apply = "--apply" in argv[1:]
+    mode = "APPLY" if apply else "DRY-RUN (pass --apply to act)"
+    port = read_port()
+    log("monitor-wake start [{0}] port={1}".format(mode, port))
+
+    try:
+        targets = fetch_targets(port)
+    except Exception as e:  # noqa: BLE001 - cockpit 未起動等でも静かに諦める
+        log("could not fetch targets from cockpit (:{0}): {1}".format(port, e))
+        return 0
+
+    if not targets:
+        log("no phase:monitoring runs. nothing to wake.")
+        return 0
+
+    for target in targets:
+        try:
+            handle(target, apply)
+        except Exception as e:  # noqa: BLE001 - 1件の失敗で他の run の wake を止めない
+            log("  ERROR handling #{0}: {1}".format(target.get("issueNumber"), e))
+
+    log("monitor-wake done")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))
