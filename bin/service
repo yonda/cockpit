@@ -124,7 +124,7 @@ case "${1:-}" in
   monitor-install)    mkdir -p "$HOME/.cache/cockpit"
                       install_agent "${MONITOR_PLIST_TEMPLATE}" "${MONITOR_LABEL}" "${MONITOR_PLIST_DEST}"
                       echo "issue-driver wake エージェントを launchd に登録しました (600s 間隔)"
-                      echo "立て直し(保険)を有効にするには plist の EnvironmentVariables に COCKPIT_WAKE_RESPAWN=1 を足す" ;;
+                      echo "稼働中の cockpit と別ポートなら plist の COCKPIT_WAKE_PORT を合わせること" ;;
   monitor-uninstall)  uninstall_agent "${MONITOR_LABEL}" "${MONITOR_PLIST_DEST}" ;;
   monitor-status)     status_agent "${MONITOR_LABEL}" ;;
   monitor-logs)       path="$HOME/.cache/cockpit/monitor-wake.log"

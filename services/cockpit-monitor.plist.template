@@ -16,6 +16,10 @@
     <string>__HOME__</string>
     <key>PATH</key>
     <string>/opt/homebrew/bin:__HOME__/.local/share/mise/shims:__HOME__/.local/bin:/usr/local/bin:/usr/bin:/bin</string>
+    <!-- 稼働中の cockpit(com.cockpit.app)のポート。worktree から install したとき
+         .env.local が本番と食い違わないよう明示する。既定 7878。 -->
+    <key>COCKPIT_WAKE_PORT</key>
+    <string>7878</string>
   </dict>
   <key>StartInterval</key>
   <integer>600</integer>
