@@ -112,7 +112,7 @@ issue ごとに 1 ファイル、機械可読（JSON）。置き場所は cockpi
   "repo": "owner/name",
   "issueNumber": 70,
   "title": "…",
-  "phase": "understanding | decomposing | implementing | reviewing | done | escalated",
+  "phase": "understanding | decomposing | implementing | reviewing | monitoring | done | escalated",
   "updatedAt": "2026-07-14T06:00:00Z",   // skill が更新のたびに書く
   "escalation": null,                     // または { reason, options, recommendation, at }
   "nodes": [                              // 分解ツリー(小の issue は 1 ノード)

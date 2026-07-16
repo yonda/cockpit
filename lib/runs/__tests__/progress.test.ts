@@ -38,6 +38,15 @@ describe("parseProgress", () => {
     expect(parsed.nodes[0].subIssue).toBe(71);
   });
 
+  it('phase "monitoring"（全 PR 提出後のマージ監視フェーズ）をパースできる', () => {
+    // issue-driver skill は全ノードの PR を出したあと phase を monitoring にする。
+    // レンズの enum に monitoring が無いと run 全体がスキップされる回帰を防ぐ (#166)。
+    const data = JSON.parse(validJson);
+    data.phase = "monitoring";
+    data.nodes[0].liveStatus = "handed_off";
+    expect(parseProgress(JSON.stringify(data)).phase).toBe("monitoring");
+  });
+
   it("escalation ありのファイルもパースできる", () => {
     const withEscalation = JSON.stringify({
       schemaVersion: 1,

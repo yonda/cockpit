@@ -15,6 +15,7 @@ export type ProgressPhase =
   | "decomposing"
   | "implementing"
   | "reviewing"
+  | "monitoring"
   | "done"
   | "escalated";
 
@@ -65,6 +66,7 @@ const PHASES: readonly ProgressPhase[] = [
   "decomposing",
   "implementing",
   "reviewing",
+  "monitoring",
   "done",
   "escalated",
 ];
