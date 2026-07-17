@@ -1,5 +1,6 @@
 import type { ProgressFile, ProgressNode } from "@/lib/runs/progress";
-import { fetchRunGithubState } from "./fetchers";
+import { fetchRunGithubState, githubRefKey } from "./fetchers";
+import { isRefNumber, isValidRepo, type RunStateRefs } from "./queries";
 import type { GhIssueState, GhPullRequestState } from "./types";
 
 /**
@@ -17,32 +18,91 @@ export type JoinedProgressFile = Omit<ProgressFile, "nodes"> & {
   nodes: JoinedNode[];
   /** GitHub への問い合わせ自体が失敗した場合のエラー。null なら正常に取得できた(該当なしとは別) */
   githubFetchError: string | null;
+  /**
+   * 一部の参照だけ GitHub 状態を取れなかった理由(空なら全て解決できた)。
+   * run 全体は表示できるが、ここに理由が入っているノードは「状態が無い」のではなく
+   * 「取れなかった」。両者は UI 上で見分けられなければならない。
+   */
+  githubPartialErrors: string[];
 };
 
-function uniqueDefined(numbers: (number | null)[]): number[] {
-  return [...new Set(numbers.filter((n): n is number => n !== null))];
+/** ノードの所属リポジトリ。省略時は run の repo(単一リポジトリで完結する通常の run) */
+function nodeRepo(node: ProgressNode, file: ProgressFile): string {
+  return node.repo ?? file.repo;
+}
+
+type CollectedRefs = {
+  refs: RunStateRefs[];
+  /** 問い合わせる前に弾いたノードの理由 */
+  invalid: string[];
+};
+
+/**
+ * ノードをリポジトリ単位にまとめる。同じ番号を複数ノードが参照していても1回だけ問い合わせる。
+ * 進捗ファイルは外部(issue-driver)が書くので、repo や番号が壊れていることがある。
+ * 壊れたノードはここで弾いて理由を返し、正常なノードの問い合わせは続ける
+ * (1ノードの書き間違いで run 全体の GitHub 状態を失わないため)。
+ */
+function collectRefs(file: ProgressFile): CollectedRefs {
+  const byRepo = new Map<string, { issueNumbers: Set<number>; prNumbers: Set<number> }>();
+  const invalid: string[] = [];
+
+  for (const node of file.nodes) {
+    const repo = nodeRepo(node, file);
+    if (!isValidRepo(repo)) {
+      invalid.push(`${node.key}: 不正な repo ${JSON.stringify(repo)}("owner/name" を期待した)`);
+      continue;
+    }
+
+    const refs = byRepo.get(repo) ?? { issueNumbers: new Set(), prNumbers: new Set() };
+    if (node.subIssue !== null) {
+      if (isRefNumber(node.subIssue)) refs.issueNumbers.add(node.subIssue);
+      else invalid.push(`${node.key}: 不正な subIssue ${node.subIssue}(正の整数を期待した)`);
+    }
+    if (node.prNumber !== null) {
+      if (isRefNumber(node.prNumber)) refs.prNumbers.add(node.prNumber);
+      else invalid.push(`${node.key}: 不正な prNumber ${node.prNumber}(正の整数を期待した)`);
+    }
+    byRepo.set(repo, refs);
+  }
+
+  return {
+    refs: [...byRepo].map(([repo, refs]) => ({
+      repo,
+      issueNumbers: [...refs.issueNumbers],
+      prNumbers: [...refs.prNumbers],
+    })),
+    invalid,
+  };
 }
 
 async function joinOneFile(file: ProgressFile): Promise<JoinedProgressFile> {
-  const issueNumbers = uniqueDefined(file.nodes.map((n) => n.subIssue));
-  const prNumbers = uniqueDefined(file.nodes.map((n) => n.prNumber));
-
+  const { refs, invalid } = collectRefs(file);
   try {
-    const { issues, pullRequests } = await fetchRunGithubState(file.repo, issueNumbers, prNumbers);
+    const { issues, pullRequests, errors } = await fetchRunGithubState(refs);
     return {
       ...file,
       githubFetchError: null,
-      nodes: file.nodes.map((node) => ({
-        ...node,
-        githubIssue: node.subIssue !== null ? (issues.get(node.subIssue) ?? null) : null,
-        githubPullRequest: node.prNumber !== null ? (pullRequests.get(node.prNumber) ?? null) : null,
-      })),
+      githubPartialErrors: [...invalid, ...errors],
+      nodes: file.nodes.map((node) => {
+        const repo = nodeRepo(node, file);
+        return {
+          ...node,
+          githubIssue:
+            node.subIssue !== null ? (issues.get(githubRefKey(repo, node.subIssue)) ?? null) : null,
+          githubPullRequest:
+            node.prNumber !== null
+              ? (pullRequests.get(githubRefKey(repo, node.prNumber)) ?? null)
+              : null,
+        };
+      }),
     };
   } catch (e) {
     // GitHub 側の障害・権限エラーで join できなくても、この run 以外の表示は落とさない(fail-safe)。
     return {
       ...file,
       githubFetchError: (e as Error).message,
+      githubPartialErrors: invalid,
       nodes: file.nodes.map((node) => ({ ...node, githubIssue: null, githubPullRequest: null })),
     };
   }

@@ -1,8 +1,9 @@
 import { env } from "@/lib/env";
-import { graphql } from "./client";
+import { graphql, graphqlPartial } from "./client";
 import {
   buildRunStateQuery,
   buildSearchQuery,
+  type RunStateRefs,
   SEARCH_PULL_REQUESTS_QUERY,
   VIEWER_QUERY,
   VIEWER_STATUS_QUERY,
@@ -65,51 +66,71 @@ type RunStateNode = {
   reviewDecision?: GhPullRequestState["reviewDecision"];
 };
 
-type RunStateResponse = {
-  repository: Record<string, RunStateNode | null> | null;
+/** repository エイリアス(r<i>)ごとに、番号エイリアス(i<N>/p<N>)を持つ */
+type RunStateResponse = Record<string, Record<string, RunStateNode | null> | null>;
+
+export type RunGithubState = {
+  issues: Map<string, GhIssueState>;
+  pullRequests: Map<string, GhPullRequestState>;
+  /**
+   * 解決できなかった参照の理由(空なら全て解決できた)。
+   * 呼び出し側はこれを必ず利用者に見せる。捨てると「権限が無くて取れなかった」ノードと
+   * 「まだ PR を作っていない」ノードが UI 上で区別できなくなる。
+   */
+  errors: string[];
 };
 
+/** run は複数リポジトリにまたがりうるので、番号だけでは一意にならない */
+export function githubRefKey(repo: string, number: number): string {
+  return `${repo}#${number}`;
+}
+
 /**
- * 進捗ファイルのノードが参照する sub-issue/PR 番号をまとめて1リクエストで取得する。
- * issueNumbers/prNumbers が両方空なら GitHub に問い合わせず空の結果を返す。
+ * 進捗ファイルのノードが参照する sub-issue/PR 番号を、リポジトリ single/複数を問わず
+ * まとめて1リクエストで取得する。結果は githubRefKey(repo, number) をキーに引ける。
+ * 参照番号が1つも無ければ GitHub に問い合わせず空の結果を返す。
+ *
+ * 解決できなかった参照(削除済み・番号違い・権限不足等)は throw せず、結果の Map に載せず
+ * 理由を errors で返す。1つの壊れた参照で run 全体の GitHub 状態を失わないため(fail-soft)。
  */
-export async function fetchRunGithubState(
-  repo: string,
-  issueNumbers: number[],
-  prNumbers: number[],
-): Promise<{
-  issues: Map<number, GhIssueState>;
-  pullRequests: Map<number, GhPullRequestState>;
-}> {
-  const issues = new Map<number, GhIssueState>();
-  const pullRequests = new Map<number, GhPullRequestState>();
-  if (issueNumbers.length === 0 && prNumbers.length === 0) {
-    return { issues, pullRequests };
-  }
+export async function fetchRunGithubState(refs: RunStateRefs[]): Promise<RunGithubState> {
+  const issues = new Map<string, GhIssueState>();
+  const pullRequests = new Map<string, GhPullRequestState>();
 
-  const [owner, name] = repo.split("/");
-  const data = await graphql<RunStateResponse>(buildRunStateQuery(issueNumbers, prNumbers), {
-    variables: { owner, name },
-  });
-  const repository = data.repository;
-  if (!repository) return { issues, pullRequests };
+  const targets = refs.filter((r) => r.issueNumbers.length > 0 || r.prNumbers.length > 0);
+  if (targets.length === 0) return { issues, pullRequests, errors: [] };
 
-  for (const n of issueNumbers) {
-    const node = repository[`i${n}`];
-    if (node) issues.set(n, { number: node.number, state: node.state as GhIssueState["state"], url: node.url });
-  }
-  for (const n of prNumbers) {
-    const node = repository[`p${n}`];
-    if (node) {
-      pullRequests.set(n, {
-        number: node.number,
-        state: node.state as GhPullRequestState["state"],
-        isDraft: node.isDraft ?? false,
-        mergeable: node.mergeable ?? "UNKNOWN",
-        reviewDecision: node.reviewDecision ?? null,
-        url: node.url,
-      });
+  const { query, variables } = buildRunStateQuery(targets);
+  const { data, errors } = await graphqlPartial<RunStateResponse>(query, { variables });
+
+  targets.forEach((ref, i) => {
+    const repository = data[`r${i}`];
+    if (!repository) return;
+
+    for (const n of ref.issueNumbers) {
+      const node = repository[`i${n}`];
+      if (node) {
+        issues.set(githubRefKey(ref.repo, n), {
+          number: node.number,
+          state: node.state as GhIssueState["state"],
+          url: node.url,
+        });
+      }
     }
-  }
-  return { issues, pullRequests };
+    for (const n of ref.prNumbers) {
+      const node = repository[`p${n}`];
+      if (node) {
+        pullRequests.set(githubRefKey(ref.repo, n), {
+          number: node.number,
+          state: node.state as GhPullRequestState["state"],
+          isDraft: node.isDraft ?? false,
+          mergeable: node.mergeable ?? "UNKNOWN",
+          reviewDecision: node.reviewDecision ?? null,
+          url: node.url,
+        });
+      }
+    }
+  });
+
+  return { issues, pullRequests, errors };
 }

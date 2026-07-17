@@ -56,6 +56,11 @@ export type ProgressSession = {
 export type ProgressNode = {
   key: string;
   title: string;
+  /**
+   * このノードの sub-issue/PR が居るリポジトリ("owner/name")。省略時は run の repo。
+   * 親 issue と別のリポジトリに sub-issue/PR を作る横断タスク用。
+   */
+  repo?: string;
   dependsOn: string[];
   liveStatus: LiveStatus;
   /** 人が読む一行(任意)。例: "実装中: xxx を追加" */
@@ -182,6 +187,13 @@ function parseNode(value: unknown, path: string): ProgressNode {
     prNumber: obj.prNumber === null ? null : assertNumber(obj.prNumber, `${path}.prNumber`),
     escalation: parseEscalation(obj.escalation ?? null, `${path}.escalation`),
   };
+  // 他の任意フィールドが明示 null で書かれる慣習(subIssue/prNumber/escalation)に合わせ、
+  // "repo": null も「省略」として受ける。ここで throw すると run ファイルごと
+  // レンズから消える(list.ts が skipped に落とす)ので、書き方の揺れで run を失わない。
+  const repo = assertNullableString(obj.repo, `${path}.repo`);
+  if (repo !== null) {
+    node.repo = repo;
+  }
   if (obj.activity !== undefined) {
     node.activity = assertString(obj.activity, `${path}.activity`);
   }

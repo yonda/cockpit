@@ -38,6 +38,29 @@ describe("parseProgress", () => {
     expect(parsed.nodes[0].subIssue).toBe(71);
   });
 
+  it("ノードの repo（親 issue と別リポジトリの sub-issue/PR）をパースできる", () => {
+    const data = JSON.parse(validJson);
+    data.nodes[0].repo = "owner/other";
+    expect(parseProgress(JSON.stringify(data)).nodes[0].repo).toBe("owner/other");
+  });
+
+  it("ノードの repo は任意（省略時は undefined のまま run の repo にフォールバックさせる）", () => {
+    expect(parseProgress(validJson).nodes[0].repo).toBeUndefined();
+  });
+
+  it("ノードの repo が string でなければ throw する", () => {
+    const data = JSON.parse(validJson);
+    data.nodes[0].repo = 123;
+    expect(() => parseProgress(JSON.stringify(data))).toThrow(/nodes\[0\]\.repo/);
+  });
+
+  it('ノードの "repo": null は省略として受ける（他の任意フィールドの書き方に合わせる）', () => {
+    // 明示 null で throw すると run ファイルごとレンズから消えてしまう
+    const data = JSON.parse(validJson);
+    data.nodes[0].repo = null;
+    expect(parseProgress(JSON.stringify(data)).nodes[0].repo).toBeUndefined();
+  });
+
   it('phase "monitoring"（全 PR 提出後のマージ監視フェーズ）をパースできる', () => {
     // issue-driver skill は全ノードの PR を出したあと phase を monitoring にする。
     // レンズの enum に monitoring が無いと run 全体がスキップされる回帰を防ぐ (#166)。

@@ -103,6 +103,13 @@ function RunCard({ run }: { run: JoinedProgressFile }) {
         </p>
       ) : null}
 
+      {/* 一部だけ取れなかった場合。出さないと「状態が無いノード」と「取れなかったノード」が同じ見た目になる */}
+      {run.githubPartialErrors.length > 0 ? (
+        <p className="mt-2 font-mono text-[11px]" style={{ color: "var(--signal-warn)" }}>
+          github state partial: {run.githubPartialErrors.join(" / ")}
+        </p>
+      ) : null}
+
       {run.escalation ? <EscalationNote escalation={run.escalation} /> : null}
 
       <RunGraphView run={run} />
