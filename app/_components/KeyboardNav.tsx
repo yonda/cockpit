@@ -4,7 +4,7 @@ import { useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { NAV } from "./navItems";
 
-// 数字キー 1〜4 で NAV の該当ボードへ遷移する。PWA を全画面常駐で使うため、
+// 数字キーで NAV の該当ボードへ遷移する。PWA を全画面常駐で使うため、
 // マウスに手を伸ばさずタブを移動できるようにする。
 export function KeyboardNav() {
   const router = useRouter();
