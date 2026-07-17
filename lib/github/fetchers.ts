@@ -1,5 +1,5 @@
 import { env } from "@/lib/env";
-import { graphql } from "./client";
+import { graphql, graphqlPartial } from "./client";
 import {
   buildRunStateQuery,
   buildSearchQuery,
@@ -72,6 +72,12 @@ type RunStateResponse = Record<string, Record<string, RunStateNode | null> | nul
 export type RunGithubState = {
   issues: Map<string, GhIssueState>;
   pullRequests: Map<string, GhPullRequestState>;
+  /**
+   * 解決できなかった参照の理由(空なら全て解決できた)。
+   * 呼び出し側はこれを必ず利用者に見せる。捨てると「権限が無くて取れなかった」ノードと
+   * 「まだ PR を作っていない」ノードが UI 上で区別できなくなる。
+   */
+  errors: string[];
 };
 
 /** run は複数リポジトリにまたがりうるので、番号だけでは一意にならない */
@@ -84,18 +90,18 @@ export function githubRefKey(repo: string, number: number): string {
  * まとめて1リクエストで取得する。結果は githubRefKey(repo, number) をキーに引ける。
  * 参照番号が1つも無ければ GitHub に問い合わせず空の結果を返す。
  *
- * 解決できなかった参照(削除済み・番号違い等)はエラーにせず結果の Map に載せないだけにする。
- * 1つの壊れた参照で run 全体の GitHub 状態を失わないため(fail-soft)。
+ * 解決できなかった参照(削除済み・番号違い・権限不足等)は throw せず、結果の Map に載せず
+ * 理由を errors で返す。1つの壊れた参照で run 全体の GitHub 状態を失わないため(fail-soft)。
  */
 export async function fetchRunGithubState(refs: RunStateRefs[]): Promise<RunGithubState> {
   const issues = new Map<string, GhIssueState>();
   const pullRequests = new Map<string, GhPullRequestState>();
 
   const targets = refs.filter((r) => r.issueNumbers.length > 0 || r.prNumbers.length > 0);
-  if (targets.length === 0) return { issues, pullRequests };
+  if (targets.length === 0) return { issues, pullRequests, errors: [] };
 
   const { query, variables } = buildRunStateQuery(targets);
-  const data = await graphql<RunStateResponse>(query, { variables, allowPartialData: true });
+  const { data, errors } = await graphqlPartial<RunStateResponse>(query, { variables });
 
   targets.forEach((ref, i) => {
     const repository = data[`r${i}`];
@@ -126,5 +132,5 @@ export async function fetchRunGithubState(refs: RunStateRefs[]): Promise<RunGith
     }
   });
 
-  return { issues, pullRequests };
+  return { issues, pullRequests, errors };
 }

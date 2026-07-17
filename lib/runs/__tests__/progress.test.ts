@@ -54,6 +54,13 @@ describe("parseProgress", () => {
     expect(() => parseProgress(JSON.stringify(data))).toThrow(/nodes\[0\]\.repo/);
   });
 
+  it('ノードの "repo": null は省略として受ける（他の任意フィールドの書き方に合わせる）', () => {
+    // 明示 null で throw すると run ファイルごとレンズから消えてしまう
+    const data = JSON.parse(validJson);
+    data.nodes[0].repo = null;
+    expect(parseProgress(JSON.stringify(data)).nodes[0].repo).toBeUndefined();
+  });
+
   it('phase "monitoring"（全 PR 提出後のマージ監視フェーズ）をパースできる', () => {
     // issue-driver skill は全ノードの PR を出したあと phase を monitoring にする。
     // レンズの enum に monitoring が無いと run 全体がスキップされる回帰を防ぐ (#166)。

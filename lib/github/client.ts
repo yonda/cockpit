@@ -19,19 +19,19 @@ type GraphQLOptions = {
   variables?: Record<string, unknown>;
   revalidate?: number;
   tags?: string[];
-  /**
-   * true なら、一部のフィールドが解決できず errors が付いていても data が返っていればそれを使う。
-   * GraphQL は解決できなかった nullable フィールドだけを null にして残りの data を返すので、
-   * 「1つの参照が壊れていても他の参照の結果は使いたい」バッチクエリ向け。
-   * data ごと欠けている(認証エラー等)場合は allowPartialData でも throw する。
-   */
-  allowPartialData?: boolean;
 };
 
-export async function graphql<T>(
+/** data と errors を両方持つ生の結果。errors があっても data が返ることがある(部分解決) */
+export type GraphQLResult<T> = {
+  data: T;
+  /** 解決できなかったフィールドの理由。空配列なら全て解決できた */
+  errors: string[];
+};
+
+async function request<T>(
   query: string,
-  { variables, revalidate = 0, tags = ["prs"], allowPartialData = false }: GraphQLOptions = {},
-): Promise<T> {
+  { variables, revalidate = 0, tags = ["prs"] }: GraphQLOptions = {},
+): Promise<GraphQLResult<T>> {
   // revalidate = 0 は Next の fetch キャッシュを使わず毎回 GitHub に問い合わせる。
   // (revalidate > 0 は stale-while-revalidate なので、体感でポーリング 2 周分
   //  遅れることがある。リクエスト内の重複は React.cache 側で除去済み)
@@ -66,17 +66,43 @@ export async function graphql<T>(
     throw new GitHubApiError("GitHub API returned invalid JSON", 500, text);
   }
 
-  if (json.errors && json.errors.length > 0 && !(allowPartialData && json.data)) {
+  const errors = (json.errors ?? []).map((e) => e.message);
+
+  // data ごと欠けている(認証エラー・クエリのパースエラー等)なら、部分解決の余地は無い。
+  if (!json.data) {
     throw new GitHubApiError(
-      `GraphQL errors: ${json.errors.map((e) => e.message).join(", ")}`,
+      errors.length > 0 ? `GraphQL errors: ${errors.join(", ")}` : "GraphQL response missing data",
       200,
       text,
     );
   }
 
-  if (!json.data) {
-    throw new GitHubApiError("GraphQL response missing data", 200, text);
-  }
+  return { data: json.data, errors };
+}
 
-  return json.data;
+/**
+ * errors があれば throw する通常の問い合わせ。
+ * 「一部が解決できなくても残りを使いたい」場合のみ graphqlPartial を使う。
+ */
+export async function graphql<T>(query: string, options: GraphQLOptions = {}): Promise<T> {
+  const { data, errors } = await request<T>(query, options);
+  if (errors.length > 0) {
+    throw new GitHubApiError(`GraphQL errors: ${errors.join(", ")}`, 200, JSON.stringify(errors));
+  }
+  return data;
+}
+
+/**
+ * data と errors を両方返す問い合わせ。GraphQL は解決できなかった nullable フィールドだけを
+ * null にして残りの data を返すので、バッチクエリで「1つの壊れた参照が全体を巻き添えにする」
+ * のを避けたい呼び出し側が使う。
+ *
+ * errors を握り潰さないこと: 呼び出し側は返った errors を必ず利用者に見せる。
+ * 見せずに捨てると、権限エラーで取れなかったのか元から存在しないのかが区別できなくなる。
+ */
+export function graphqlPartial<T>(
+  query: string,
+  options: GraphQLOptions = {},
+): Promise<GraphQLResult<T>> {
+  return request<T>(query, options);
 }
