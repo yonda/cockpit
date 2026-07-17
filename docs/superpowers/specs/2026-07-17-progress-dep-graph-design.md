@@ -116,7 +116,7 @@ y = row * (88 + 8)
 
 ## エラー処理・退行しないもの
 
-- **既存の fail-safe を維持** — `githubFetchError` がある run はグラフを描いた上でエラー行を出す。GitHub が引けない場合、stage の導出規則 1・2 が使えず全ノードが `implementing` か `queued` に落ちる。これは「証明できる最高段階」の定義どおりの挙動であり、エラー行が出ていることで説明がつく
+- **既存の fail-safe を維持** — `githubFetchError` がある run はグラフを描いた上でエラー行を出す。ただし join に失敗すると `runJoin` は全ノードの `githubPullRequest` を null に潰すため、stage は自己申告だけで決まる（マージ済みのノードが `review` に見える等、実際より低く出る）。run 単位のエラー行だけではレール自体が退行していることが伝わらないので、**ノードのラベルに `· unverified` を付けて確定していないことを表示に出す**
 - **escalation の表示は現状維持** — run レベル・ノードレベルとも既存の `EscalationNote` を残す。ノードの escalation は箱の高さを固定するためグラフの下に出し、どのノードのものか分かるようタイトルを添える。escalation を持つノードの箱は枠を alert 色にして対応づける
 - 完了 (done) run の折りたたみ (#164)、`phase:monitoring` の扱い (#166) は現状維持
 - 破損ファイルのスキップ表示は現状維持
@@ -125,8 +125,9 @@ y = row * (88 + 8)
 
 導出ロジックは純関数なので `lib/runs/__tests__/` と同じ流儀でユニットテストを書く。
 
-- ステージ導出: 規則 1〜4 の各分岐と優先順（PR `MERGED` が `liveStatus` に優先すること、PR なしの `handed_off` が `queued` に落ちること）
-- 条件導出: `blocked` と PR `CONFLICTING` がそれぞれ blocked を立てること、stage と直交していること（`blocked` かつ PR open → `blocked @ review`）
+- ステージ導出: 規則 1〜5 の各分岐と優先順（PR `MERGED` が `liveStatus` に優先すること、PR なしの `handed_off` / `reviewing` が自己申告どおり `review` になること）
+- 条件導出: `blocked` / PR `CONFLICTING` / マージされず閉じられた PR がそれぞれ blocked を立てること、stage と直交していること（PR `MERGED` + `blocked` の自己申告 → `blocked @ merged`。緑で塗り潰さない）
+- レイアウト: key の重複したノードが別の座標に描かれること、`dependsOn` の重複が 1 本の辺に畳まれること、自己参照が辺にならないこと、循環時に最小列が 0 に寄ること
 - レイヤリング: 依存なし / 直線チェーン / 複数親 / **循環**（無限再帰しないこと）
 - 行割り当て: 親の行に子が寄ること、行が競合したら下に詰むこと
 

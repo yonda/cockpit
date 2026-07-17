@@ -91,6 +91,18 @@ describe("deriveCondition", () => {
     expect(deriveCondition(node({ liveStatus: "blocked" }))).toBe("blocked");
   });
 
+  it("PR がマージ済みでも blocked の自己申告は消さない (条件は stage と直交する)", () => {
+    const n = node({ liveStatus: "blocked", githubPullRequest: pr({ state: "MERGED" }) });
+    expect(deriveCondition(n)).toBe("blocked");
+    expect(stageLabel(deriveStage(n), deriveCondition(n))).toBe("blocked @ merged");
+  });
+
+  it("マージされずに閉じられた PR は blocked (レビュー待ちと見分けがつかないため)", () => {
+    const n = node({ liveStatus: "reviewing", githubPullRequest: pr({ state: "CLOSED" }) });
+    expect(deriveCondition(n)).toBe("blocked");
+    expect(stageLabel(deriveStage(n), deriveCondition(n))).toBe("blocked @ review");
+  });
+
   it("PR が CONFLICTING なら blocked", () => {
     const n = node({
       liveStatus: "implementing",
@@ -113,5 +125,11 @@ describe("stageLabel", () => {
   it("blocked でなければ段階名をそのまま出す", () => {
     expect(stageLabel("implementing", "normal")).toBe("implementing");
     expect(stageLabel("merged", "ok")).toBe("merged");
+  });
+
+  it("GitHub を引けていない run では確定していないことを出す", () => {
+    // stage が自己申告だけで決まる状態。実際にはマージ済みかもしれない。
+    expect(stageLabel("review", "normal", true)).toBe("review · unverified");
+    expect(stageLabel("queued", "blocked", true)).toBe("blocked @ queued · unverified");
   });
 });

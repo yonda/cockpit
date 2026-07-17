@@ -78,7 +78,7 @@ describe("layoutRunGraph", () => {
   it("辺は親の右辺中央から子の左辺中央へ引かれる", () => {
     const graph = layoutRunGraph([node("a"), node("b", ["a"])]);
     expect(graph.edges).toHaveLength(1);
-    expect(graph.edges[0]).toEqual({
+    expect(graph.edges[0]).toMatchObject({
       fromKey: "a",
       toKey: "b",
       x1: BOX_W,
@@ -86,6 +86,17 @@ describe("layoutRunGraph", () => {
       x2: BOX_W + COL_GAP,
       y2: BOX_H / 2,
     });
+  });
+
+  it("dependsOn に同じキーが重複していても辺は 1 本に畳まれる", () => {
+    const graph = layoutRunGraph([node("a"), node("b", ["a", "a"])]);
+    expect(graph.edges).toHaveLength(1);
+    expect(new Set(graph.edges.map((e) => e.id)).size).toBe(1);
+  });
+
+  it("自己参照は辺にしない (後ろ向きの線を引かない)", () => {
+    const graph = layoutRunGraph([node("a", ["a"])]);
+    expect(graph.edges).toEqual([]);
   });
 
   it("存在しないキーへの依存は辺にならない (壊れたファイルでも落とさない)", () => {
@@ -106,9 +117,13 @@ describe("layoutRunGraph", () => {
     expect(graph.height).toBe(BOX_H);
   });
 
-  it("循環していても無限再帰せず有限の列に収まる", () => {
+  it("循環していても無限再帰せず、左端の列から詰めて描かれる", () => {
+    // 循環すると深さが押し上がるが、左側の列が空のままだと
+    // 「スクロールしないと何も見えない空白」になる。最小列を 0 に寄せること。
     const graph = layoutRunGraph([node("a", ["b"]), node("b", ["a"])]);
     expect(graph.nodes).toHaveLength(2);
+    expect(Math.min(...graph.nodes.map((g) => g.col))).toBe(0);
+    expect(graph.nodes.some((g) => g.x === 0)).toBe(true);
     for (const g of graph.nodes) {
       expect(Number.isFinite(g.col)).toBe(true);
       expect(Number.isFinite(g.row)).toBe(true);
@@ -119,5 +134,25 @@ describe("layoutRunGraph", () => {
     const graph = layoutRunGraph([node("a", ["a"])]);
     expect(graph.nodes).toHaveLength(1);
     expect(Number.isFinite(colOf(graph, "a"))).toBe(true);
+  });
+
+  it("key が重複していても両方が別の座標に描かれる (箱が重なって消えない)", () => {
+    // 進捗ファイルは key の一意性を保証していない(parseProgress は型しか見ない)。
+    const graph = layoutRunGraph([node("dup"), node("dup"), node("c", ["dup"])]);
+    expect(graph.nodes).toHaveLength(3);
+    const positions = graph.nodes.map((g) => `${g.x},${g.y}`);
+    expect(new Set(positions).size).toBe(3);
+    expect(new Set(graph.nodes.map((g) => g.id)).size).toBe(3);
+  });
+
+  it("列 0 の行は詰めて使われる (重複キーがあっても行を飛ばさない)", () => {
+    const graph = layoutRunGraph([node("dup"), node("dup")]);
+    expect(graph.nodes.map((g) => g.row).sort()).toEqual([0, 1]);
+  });
+
+  it("nodes は (col, row) 順に並ぶ (DOM 順と見た目の順を一致させる)", () => {
+    // 記載順は t-child(列1) が先、t-root(列0) が後。描画順は列 0 が先であるべき。
+    const graph = layoutRunGraph([node("child", ["root"]), node("root")]);
+    expect(graph.nodes.map((g) => g.node.key)).toEqual(["root", "child"]);
   });
 });

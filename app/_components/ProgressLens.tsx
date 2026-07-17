@@ -126,8 +126,20 @@ function RunGraphView({ run }: { run: JoinedProgressFile }) {
   return (
     <div className="mt-3 overflow-x-auto">
       <div className="relative" style={{ width: graph.width, height: graph.height }}>
+        {graph.nodes.map((g) => (
+          <NodeBox
+            key={g.id}
+            node={g.node}
+            x={g.x}
+            y={g.y}
+            githubUnavailable={run.githubFetchError !== null}
+          />
+        ))}
+        {/* 辺は箱より後に描く(= 上に載せる)。隣接列の辺は列の隙間を通るので箱に重ならず
+            見た目は変わらないが、2 列以上を跨ぐ辺は間の箱の裏に回り込んで完全に消えてしまう。
+            依存の形を見せる画面が依存を隠さないことを、見た目の綺麗さより優先する。 */}
         <svg
-          className="absolute inset-0"
+          className="pointer-events-none absolute inset-0"
           width={graph.width}
           height={graph.height}
           aria-hidden="true"
@@ -147,7 +159,7 @@ function RunGraphView({ run }: { run: JoinedProgressFile }) {
           </defs>
           {graph.edges.map((edge) => (
             <line
-              key={`${edge.fromKey}->${edge.toKey}`}
+              key={edge.id}
               x1={edge.x1}
               y1={edge.y1}
               x2={edge.x2}
@@ -158,9 +170,6 @@ function RunGraphView({ run }: { run: JoinedProgressFile }) {
             />
           ))}
         </svg>
-        {graph.nodes.map((g) => (
-          <NodeBox key={g.node.key} node={g.node} x={g.x} y={g.y} />
-        ))}
       </div>
     </div>
   );
@@ -175,7 +184,17 @@ function nodeColor(stage: NodeStage, condition: NodeCondition): string {
   return "var(--signal-idle)";
 }
 
-function NodeBox({ node, x, y }: { node: JoinedNode; x: number; y: number }) {
+function NodeBox({
+  node,
+  x,
+  y,
+  githubUnavailable,
+}: {
+  node: JoinedNode;
+  x: number;
+  y: number;
+  githubUnavailable: boolean;
+}) {
   const stage = deriveStage(node);
   const condition = deriveCondition(node);
   const color = nodeColor(stage, condition);
@@ -193,22 +212,33 @@ function NodeBox({ node, x, y }: { node: JoinedNode; x: number; y: number }) {
         backgroundColor: "var(--panel)",
       }}
     >
-      <span className="truncate font-mono text-[11px] text-[var(--ink)]" title={node.title}>
+      {/* 各行に shrink-0 が要る: 箱の高さは固定なので、これが無いと flex が行を縮めて
+          グリフの下端を切る。BOX_H は 4 行が潰れずに収まる高さに合わせてある。 */}
+      <span
+        className="shrink-0 truncate font-mono text-[11px] leading-[16px] text-[var(--ink)]"
+        title={node.title}
+      >
         <span className="text-[var(--ink-faint)]">{node.key}</span> {node.title}
       </span>
 
-      <span className="flex items-center gap-2">
+      <span className="flex shrink-0 items-center gap-2">
         <StageRail stage={stage} color={color} />
         <span className="min-w-0 truncate font-mono-caps text-[9px]" style={{ color }}>
-          {stageLabel(stage, condition)}
+          {stageLabel(stage, condition, githubUnavailable)}
         </span>
       </span>
 
-      <span className="h-[13px] truncate font-mono text-[10px] text-[var(--ink-muted)]">
+      {/* activity が無いノードでも行の高さを保ち、箱内の各行が縦に揃うようにする。
+          箱の幅で切れるが、agent が何をしているかを説明する唯一の自然言語なので
+          title で全文を読めるようにする。 */}
+      <span
+        className="h-[14px] shrink-0 truncate font-mono text-[10px] leading-[14px] text-[var(--ink-muted)]"
+        title={node.activity}
+      >
         {node.activity ?? ""}
       </span>
 
-      <span className="flex flex-wrap items-center gap-2">
+      <span className="flex h-[15px] shrink-0 flex-wrap items-center gap-2 overflow-hidden">
         {node.githubPullRequest ? <PrBadge pr={node.githubPullRequest} /> : null}
         {node.githubIssue ? <IssueBadge issue={node.githubIssue} /> : null}
       </span>

@@ -29,16 +29,36 @@ export function deriveStage(node: JoinedNode): NodeStage {
   return "queued";
 }
 
-/** stage と直交する条件。blocked は段階を持たない条件なのでここで表す。 */
+/**
+ * stage と直交する条件。blocked は段階を持たない条件なのでここで表す。
+ *
+ * blocked を ok より先に判定する。PR がマージ済みでもノードが blocked を自己申告して
+ * いれば(後続作業で詰まった等)、それは人が見るべき事実であり、緑で塗り潰して
+ * 消してはならない。条件が stage と直交するとは、そういう意味である。
+ */
 export function deriveCondition(node: JoinedNode): NodeCondition {
-  if (node.githubPullRequest?.state === "MERGED") return "ok";
-  if (node.liveStatus === "blocked" || node.githubPullRequest?.mergeable === "CONFLICTING") {
-    return "blocked";
-  }
+  const pr = node.githubPullRequest;
+  if (node.liveStatus === "blocked") return "blocked";
+  if (pr?.mergeable === "CONFLICTING") return "blocked";
+  // マージされずに閉じられた PR は行き止まり。放置すると「レビュー待ち」と
+  // 見分けがつかず、人が気づけない。
+  if (pr?.state === "CLOSED") return "blocked";
+  if (pr?.state === "MERGED") return "ok";
   return "normal";
 }
 
-/** blocked は段階を持たないため「条件＠段階」で表示する。 */
-export function stageLabel(stage: NodeStage, condition: NodeCondition): string {
-  return condition === "blocked" ? `blocked @ ${stage}` : stage;
+/**
+ * blocked は段階を持たないため「条件＠段階」で表示する。
+ *
+ * GitHub を引けなかった run では stage が自己申告だけで決まる(runJoin が全ノードの
+ * githubPullRequest を null に潰すため)。マージ済みのノードが review に見える等、
+ * 段階が実際より低く出るので、確定していないことを表示に出す。
+ */
+export function stageLabel(
+  stage: NodeStage,
+  condition: NodeCondition,
+  githubUnavailable = false,
+): string {
+  const base = condition === "blocked" ? `blocked @ ${stage}` : stage;
+  return githubUnavailable ? `${base} · unverified` : base;
 }
