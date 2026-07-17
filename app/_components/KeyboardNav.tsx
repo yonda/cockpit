@@ -14,6 +14,10 @@ export function KeyboardNav() {
       // 修飾キー併用時 (Cmd/Ctrl/Alt) はブラウザ標準操作を尊重して無視する
       if (event.metaKey || event.ctrlKey || event.altKey) return;
 
+      // 遷移先は force-dynamic で毎回 RSC を取り直すため、キーリピートをそのまま
+      // 通すと push が連射され再フェッチが積み上がる。押しっぱなしは 1 回として扱う。
+      if (event.repeat) return;
+
       const position = Number(event.key);
       if (!Number.isInteger(position) || position < 1 || position > NAV.length) {
         return;
