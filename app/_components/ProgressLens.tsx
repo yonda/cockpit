@@ -1,9 +1,12 @@
-import { cache } from "react";
+import { cache, Fragment } from "react";
 import { AlertOctagon } from "lucide-react";
 import { listProgressFiles } from "@/lib/runs/list";
 import { joinProgressFilesWithGithub } from "@/lib/github/runJoin";
 import type { JoinedNode, JoinedProgressFile } from "@/lib/github/runJoin";
-import type { ProgressEscalation, LiveStatus } from "@/lib/runs/progress";
+import type { ProgressEscalation } from "@/lib/runs/progress";
+import { BOX_H, BOX_W, layoutRunGraph } from "@/lib/runs/layout";
+import { STAGES, deriveCondition, deriveStage, stageLabel } from "@/lib/runs/nodeStage";
+import type { NodeCondition, NodeStage } from "@/lib/runs/nodeStage";
 import { EmptyState } from "./EmptyState";
 
 // issue-driver の進捗ファイル(ライブ状態) × GitHub(確定状態) の join レンズ。
@@ -16,17 +19,6 @@ const fetchRuns = cache(async () => {
 
 function hasEscalation(run: JoinedProgressFile): boolean {
   return run.escalation !== null || run.nodes.some((n) => n.escalation !== null);
-}
-
-// dependsOn を辿った深さをインデントに使う。循環していても無限再帰しないよう経路を渡す。
-function nodeDepth(node: JoinedNode, byKey: Map<string, JoinedNode>, path: Set<string> = new Set()): number {
-  if (node.dependsOn.length === 0 || path.has(node.key)) return 0;
-  const nextPath = new Set(path).add(node.key);
-  const depths = node.dependsOn.map((depKey) => {
-    const dep = byKey.get(depKey);
-    return dep ? nodeDepth(dep, byKey, nextPath) + 1 : 0;
-  });
-  return Math.max(...depths);
 }
 
 export async function ProgressLens() {
@@ -79,7 +71,7 @@ function DoneSection({ runs }: { runs: JoinedProgressFile[] }) {
 
 function RunCard({ run }: { run: JoinedProgressFile }) {
   const escalated = hasEscalation(run);
-  const byKey = new Map(run.nodes.map((n) => [n.key, n]));
+  const escalatedNodes = run.nodes.filter((n) => n.escalation !== null);
 
   return (
     <section
@@ -113,12 +105,143 @@ function RunCard({ run }: { run: JoinedProgressFile }) {
 
       {run.escalation ? <EscalationNote escalation={run.escalation} /> : null}
 
-      <ol className="mt-3 flex flex-col gap-2">
-        {run.nodes.map((node) => (
-          <NodeRow key={node.key} node={node} depth={nodeDepth(node, byKey)} />
-        ))}
-      </ol>
+      <RunGraphView run={run} />
+
+      {escalatedNodes.map((node) => (
+        <div key={node.key} className="mt-3">
+          <p className="font-mono text-[11px] text-[var(--ink-dim)]">{node.title}</p>
+          {node.escalation ? <EscalationNote escalation={node.escalation} /> : null}
+        </div>
+      ))}
     </section>
+  );
+}
+
+// 依存の深さから座標が確定するので、SVG の辺も絶対配置の箱もサーバ側で描き切れる。
+function RunGraphView({ run }: { run: JoinedProgressFile }) {
+  const graph = layoutRunGraph(run.nodes);
+  // marker id はドキュメント全体で一意にする(同一ページに複数の run が並ぶため)。
+  const arrowId = `dep-arrow-${run.repo.replace(/[^a-zA-Z0-9]/g, "-")}-${run.issueNumber}`;
+
+  return (
+    <div className="mt-3 overflow-x-auto">
+      <div className="relative" style={{ width: graph.width, height: graph.height }}>
+        <svg
+          className="absolute inset-0"
+          width={graph.width}
+          height={graph.height}
+          aria-hidden="true"
+        >
+          <defs>
+            <marker
+              id={arrowId}
+              viewBox="0 0 8 8"
+              refX="8"
+              refY="4"
+              markerWidth="8"
+              markerHeight="8"
+              orient="auto"
+            >
+              <path d="M 0 0 L 8 4 L 0 8 z" fill="var(--hairline-strong)" />
+            </marker>
+          </defs>
+          {graph.edges.map((edge) => (
+            <line
+              key={`${edge.fromKey}->${edge.toKey}`}
+              x1={edge.x1}
+              y1={edge.y1}
+              x2={edge.x2}
+              y2={edge.y2}
+              stroke="var(--hairline-strong)"
+              strokeWidth={1.5}
+              markerEnd={`url(#${arrowId})`}
+            />
+          ))}
+        </svg>
+        {graph.nodes.map((g) => (
+          <NodeBox key={g.node.key} node={g.node} x={g.x} y={g.y} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// stage が進むほど gray → cyan → amber → green。blocked は段階に関わらず alert で塗る。
+function nodeColor(stage: NodeStage, condition: NodeCondition): string {
+  if (condition === "blocked") return "var(--signal-alert)";
+  if (stage === "merged") return "var(--signal-ok)";
+  if (stage === "review") return "var(--signal-warn)";
+  if (stage === "implementing") return "var(--signal-info)";
+  return "var(--signal-idle)";
+}
+
+function NodeBox({ node, x, y }: { node: JoinedNode; x: number; y: number }) {
+  const stage = deriveStage(node);
+  const condition = deriveCondition(node);
+  const color = nodeColor(stage, condition);
+
+  return (
+    <div
+      className="absolute box-border flex flex-col justify-center gap-1.5 border border-l-[3px] px-3 py-2"
+      style={{
+        left: x,
+        top: y,
+        width: BOX_W,
+        height: BOX_H,
+        borderColor: node.escalation !== null ? "var(--signal-alert)" : "var(--hairline)",
+        borderLeftColor: color,
+        backgroundColor: "var(--panel)",
+      }}
+    >
+      <span className="truncate font-mono text-[11px] text-[var(--ink)]" title={node.title}>
+        <span className="text-[var(--ink-faint)]">{node.key}</span> {node.title}
+      </span>
+
+      <span className="flex items-center gap-2">
+        <StageRail stage={stage} color={color} />
+        <span className="min-w-0 truncate font-mono-caps text-[9px]" style={{ color }}>
+          {stageLabel(stage, condition)}
+        </span>
+      </span>
+
+      <span className="h-[13px] truncate font-mono text-[10px] text-[var(--ink-muted)]">
+        {node.activity ?? ""}
+      </span>
+
+      <span className="flex flex-wrap items-center gap-2">
+        {node.githubPullRequest ? <PrBadge pr={node.githubPullRequest} /> : null}
+        {node.githubIssue ? <IssueBadge issue={node.githubIssue} /> : null}
+      </span>
+    </div>
+  );
+}
+
+// 4点レール。到達済みの段階まで色を塗り、現在地のドットにリングを付ける。
+function StageRail({ stage, color }: { stage: NodeStage; color: string }) {
+  const current = STAGES.indexOf(stage);
+  return (
+    <span className="flex w-[68px] shrink-0 items-center" aria-hidden="true">
+      {STAGES.map((s, i) => (
+        <Fragment key={s}>
+          {i > 0 ? (
+            <span
+              className="h-px flex-1"
+              style={{ backgroundColor: i <= current ? color : "var(--hairline)" }}
+            />
+          ) : null}
+          <span
+            className="h-[7px] w-[7px] shrink-0 rounded-full"
+            style={{
+              backgroundColor: i <= current ? color : "var(--hairline)",
+              boxShadow:
+                i === current
+                  ? `0 0 0 3px color-mix(in srgb, ${color} 18%, transparent)`
+                  : undefined,
+            }}
+          />
+        </Fragment>
+      ))}
+    </span>
   );
 }
 
@@ -133,44 +256,6 @@ function EscalationNote({ escalation }: { escalation: ProgressEscalation }) {
       </p>
       <p className="mt-1">recommendation: {escalation.recommendation}</p>
     </div>
-  );
-}
-
-function NodeRow({ node, depth }: { node: JoinedNode; depth: number }) {
-  const escalated = node.escalation !== null;
-  return (
-    <li
-      className="flex flex-col gap-1 border-l py-1 pl-3"
-      style={{
-        marginLeft: depth * 16,
-        borderColor: escalated ? "var(--signal-alert)" : "var(--hairline)",
-      }}
-    >
-      <div className="flex flex-wrap items-center gap-2">
-        <span className="font-mono text-[11px] text-[var(--ink)]">{node.title}</span>
-        <LiveStatusBadge status={node.liveStatus} />
-        {node.githubPullRequest ? <PrBadge pr={node.githubPullRequest} /> : null}
-        {node.githubIssue ? <IssueBadge issue={node.githubIssue} /> : null}
-      </div>
-      {node.activity ? (
-        <p className="font-mono text-[11px] text-[var(--ink-muted)]">{node.activity}</p>
-      ) : null}
-      {node.escalation ? <EscalationNote escalation={node.escalation} /> : null}
-    </li>
-  );
-}
-
-function LiveStatusBadge({ status }: { status: LiveStatus }) {
-  const color =
-    status === "blocked"
-      ? "var(--signal-alert)"
-      : status === "handed_off"
-        ? "var(--signal-ok)"
-        : "var(--signal-info)";
-  return (
-    <span className="font-mono-caps text-[10px]" style={{ color }}>
-      {status}
-    </span>
   );
 }
 

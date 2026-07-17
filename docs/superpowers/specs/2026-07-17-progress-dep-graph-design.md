@@ -64,14 +64,15 @@ type NodeStage = "queued" | "implementing" | "review" | "merged";
 type NodeCondition = "normal" | "blocked" | "ok";
 ```
 
-**stage は「証明できる最高段階」として導出する。** 進捗ファイルは履歴を持たないため「直前にどこまで進んでいたか」は原理的に復元できない。`liveStatus` が `blocked` になった時点で、それ以前の段階の情報は失われている。したがって stage は推測せず、いま手元にある事実から証明できる最高段階を採る。上から順に評価し、最初に当たったものを採用する。
+**stage は「GitHub の確定事実 > 進捗ファイルの自己申告 > 既定」の優先順で導出する。** 上から順に評価し、最初に当たったものを採用する。
 
 | 順 | 条件 | stage | 根拠 |
 |---|---|---|---|
 | 1 | PR が `MERGED` | merged | GitHub 権威の事実 |
-| 2 | PR が存在する（open / closed） | review | PR がある = 実装は出た |
-| 3 | `liveStatus` が `implementing` | implementing | 進捗ファイルの自己申告 |
-| 4 | 上記いずれでもない | queued | 進んだ証拠がない |
+| 2 | PR が存在する（open / closed） | review | GitHub 権威の事実（PR がある = 実装は出た） |
+| 3 | `liveStatus` が `reviewing` / `handed_off` | review | 進捗ファイルの自己申告 |
+| 4 | `liveStatus` が `implementing` | implementing | 進捗ファイルの自己申告 |
+| 5 | 上記いずれでもない | queued | 進んだ証拠がない |
 
 condition は stage と直交に決める。
 
@@ -81,9 +82,14 @@ condition は stage と直交に決める。
 | `liveStatus` が `blocked`、または PR が `CONFLICTING` | blocked |
 | それ以外 | normal |
 
-`blocked` は段階を持たない条件なので、表示は「条件＠段階」= `blocked @ queued` とする。stage 4 の `queued` は「進んだ証拠がない」の意であり、「まだ着手していない」と断定しているわけではない点に注意する。
+`blocked` は段階を持たない条件なので、表示は「条件＠段階」= `blocked @ queued` とする。規則 5 の `queued` は「進んだ証拠がない」の意であり、「まだ着手していない」と断定しているわけではない点に注意する。
 
-この導出では `reviewing` と `handed_off` が明示的に登場しない。PR が存在すれば規則 2 で `review` に、マージ済みなら規則 1 で `merged` に落ちるためである。PR 番号を持たないまま `reviewing` / `handed_off` を名乗るノードは規則 4 で `queued` に落ちる — これは進捗ファイル側の記述漏れであり、レンズが取り繕うべきものではない（そう見えることで書き手側の不備が可視化される）。
+**自己申告を信じる範囲について。** 当初は「証明できる最高段階」だけを採り、PR 番号を持たない `reviewing` / `handed_off` は `queued` に落とす設計だった（進捗ファイル側の記述漏れが可視化される、という理屈）。実データで描いて棄却した。
+
+- 実際の run に `liveStatus: "handed_off"` かつ `prNumber: null` のノードがあり、`activity` は「完了。受入条件全パス」だった。これが**グレーの queued** として描かれた。不備の可視化にはなっておらず、未着手と見分けのつかない、もっともらしい嘘になっていた
+- `implementing` の自己申告は信じるのに `reviewing` / `handed_off` の自己申告は信じない、という非対称に根拠がなかった
+
+よって自己申告は段階によらず一律に信じ、GitHub の事実があればそれで上書きする。`blocked` だけは自己申告そのものが段階を持たないため、PR が無ければ `queued` に落ちる。
 
 これにより「依存ゼロなのに blocked」なノードが **線が無いのに赤い** として絵で区別できる。依存待ちの blocked には線があるため、外部要因の blocked と視覚的に分離される。
 

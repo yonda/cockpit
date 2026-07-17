@@ -61,12 +61,19 @@ describe("deriveStage", () => {
     expect(deriveStage(n)).toBe("review");
   });
 
-  it("PR 番号を持たないまま handed_off を名乗るノードは queued に落ちる (書き手側の記述漏れを可視化する)", () => {
-    expect(deriveStage(node({ liveStatus: "handed_off" }))).toBe("queued");
+  it("PR がまだ join できていなくても handed_off の自己申告は review として扱う", () => {
+    // GitHub 側の事実が無い間は自己申告に従う。implementing を信じて handed_off を
+    // 信じない理由はなく、queued に落とすと未着手と見分けがつかなくなる。
+    expect(deriveStage(node({ liveStatus: "handed_off" }))).toBe("review");
   });
 
-  it("PR 番号を持たないまま reviewing を名乗るノードは queued に落ちる", () => {
-    expect(deriveStage(node({ liveStatus: "reviewing" }))).toBe("queued");
+  it("PR がまだ join できていなくても reviewing の自己申告は review として扱う", () => {
+    expect(deriveStage(node({ liveStatus: "reviewing" }))).toBe("review");
+  });
+
+  it("GitHub の確定事実は自己申告に優先する (handed_off + PR MERGED → merged)", () => {
+    const n = node({ liveStatus: "handed_off", githubPullRequest: pr({ state: "MERGED" }) });
+    expect(deriveStage(n)).toBe("merged");
   });
 
   it("prNumber があっても GitHub 取得失敗で join できていなければ liveStatus だけで決まる", () => {

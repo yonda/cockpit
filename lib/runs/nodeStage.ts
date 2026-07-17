@@ -14,13 +14,17 @@ export type NodeCondition = "normal" | "blocked" | "ok";
 export const STAGES: readonly NodeStage[] = ["queued", "implementing", "review", "merged"];
 
 /**
- * 「証明できる最高段階」を返す。進捗ファイルは履歴を持たないため、blocked になった時点で
- * それ以前の段階は原理的に復元できない。よって推測せず、手元の事実から証明できる段階だけを採る。
+ * 段階を「GitHub の確定事実 > 進捗ファイルの自己申告 > 既定」の優先順で決める。
  * 上から順に評価し、最初に当たったものを採用する。
+ *
+ * blocked は段階を持たない条件であり、進捗ファイルは履歴を持たない。よって blocked に
+ * なった時点で自己申告していた段階は原理的に復元できず、PR が無ければ queued に落ちる。
+ * これは「進んだ証拠がない」の意であり、「まだ着手していない」の断定ではない。
  */
 export function deriveStage(node: JoinedNode): NodeStage {
   if (node.githubPullRequest?.state === "MERGED") return "merged";
   if (node.githubPullRequest !== null) return "review";
+  if (node.liveStatus === "reviewing" || node.liveStatus === "handed_off") return "review";
   if (node.liveStatus === "implementing") return "implementing";
   return "queued";
 }
