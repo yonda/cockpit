@@ -105,30 +105,61 @@ export function buildRepoScope(org: string): string {
   return `archived:false org:${org} user:@me`;
 }
 
+/** 1リポジトリぶんの参照番号。run のノードをリポジトリ単位にまとめたもの */
+export type RunStateRefs = {
+  repo: string;
+  issueNumbers: number[];
+  prNumbers: number[];
+};
+
 /**
  * issue-driver 進捗ファイルのノードが参照する issue/PR 番号をまとめて1リクエストで取る
- * バッチクエリ。GraphQL エイリアス(i<N>/p<N>)で番号ごとに結果を分ける。
- * 番号は progress.ts の assertNumber を通った number のみが渡る想定で、文字列連結でも
- * インジェクションの余地はない(GraphQL 変数化はエイリアスには使えないため)。
+ * バッチクエリ。run は複数リポジトリにまたがりうる(親 issue と別 repo に sub-issue/PR を
+ * 作る横断タスク)ので、リポジトリごとに repository エイリアス(r<i>)を並べ、その中を
+ * 番号ごとのエイリアス(i<N>/p<N>)で分ける。
+ *
+ * 番号は progress.ts の assertNumber を通った number のみが渡る想定なので、文字列連結でも
+ * インジェクションの余地はない(GraphQL 変数はエイリアスや引数名には使えないため)。
+ * 一方 repo は進捗ファイル由来の任意文字列なので、クエリ本文に埋め込まず変数で渡す。
  */
-export function buildRunStateQuery(issueNumbers: number[], prNumbers: number[]): string {
-  const issueFields = issueNumbers
-    .map((n) => `i${n}: issue(number: ${n}) { number state url }`)
-    .join("\n");
-  const prFields = prNumbers
-    .map(
-      (n) =>
-        `p${n}: pullRequest(number: ${n}) { number state isDraft mergeable reviewDecision url }`,
-    )
-    .join("\n");
-  return /* GraphQL */ `
-    query RunState($owner: String!, $name: String!) {
-      repository(owner: $owner, name: $name) {
-        ${issueFields}
-        ${prFields}
-      }
+export function buildRunStateQuery(refs: RunStateRefs[]): {
+  query: string;
+  variables: Record<string, string>;
+} {
+  const variables: Record<string, string> = {};
+  const params: string[] = [];
+  const blocks: string[] = [];
+
+  refs.forEach((ref, i) => {
+    const [owner, name] = ref.repo.split("/");
+    if (!owner || !name) {
+      throw new Error(`不正な repo 指定: ${JSON.stringify(ref.repo)} ("owner/name" を期待した)`);
     }
-  `;
+    variables[`o${i}`] = owner;
+    variables[`n${i}`] = name;
+    params.push(`$o${i}: String!`, `$n${i}: String!`);
+
+    const fields = [
+      ...ref.issueNumbers.map((n) => `i${n}: issue(number: ${n}) { number state url }`),
+      ...ref.prNumbers.map(
+        (n) =>
+          `p${n}: pullRequest(number: ${n}) { number state isDraft mergeable reviewDecision url }`,
+      ),
+    ].join("\n        ");
+
+    blocks.push(`r${i}: repository(owner: $o${i}, name: $n${i}) {
+        ${fields}
+      }`);
+  });
+
+  return {
+    query: /* GraphQL */ `
+    query RunState(${params.join(", ")}) {
+      ${blocks.join("\n      ")}
+    }
+  `,
+    variables,
+  };
 }
 
 export function buildSearchQuery(

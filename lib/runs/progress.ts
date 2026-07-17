@@ -56,6 +56,11 @@ export type ProgressSession = {
 export type ProgressNode = {
   key: string;
   title: string;
+  /**
+   * このノードの sub-issue/PR が居るリポジトリ("owner/name")。省略時は run の repo。
+   * 親 issue と別のリポジトリに sub-issue/PR を作る横断タスク用。
+   */
+  repo?: string;
   dependsOn: string[];
   liveStatus: LiveStatus;
   /** 人が読む一行(任意)。例: "実装中: xxx を追加" */
@@ -182,6 +187,9 @@ function parseNode(value: unknown, path: string): ProgressNode {
     prNumber: obj.prNumber === null ? null : assertNumber(obj.prNumber, `${path}.prNumber`),
     escalation: parseEscalation(obj.escalation ?? null, `${path}.escalation`),
   };
+  if (obj.repo !== undefined) {
+    node.repo = assertString(obj.repo, `${path}.repo`);
+  }
   if (obj.activity !== undefined) {
     node.activity = assertString(obj.activity, `${path}.activity`);
   }

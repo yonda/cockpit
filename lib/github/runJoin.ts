@@ -1,5 +1,6 @@
 import type { ProgressFile, ProgressNode } from "@/lib/runs/progress";
-import { fetchRunGithubState } from "./fetchers";
+import { fetchRunGithubState, githubRefKey } from "./fetchers";
+import type { RunStateRefs } from "./queries";
 import type { GhIssueState, GhPullRequestState } from "./types";
 
 /**
@@ -19,24 +20,48 @@ export type JoinedProgressFile = Omit<ProgressFile, "nodes"> & {
   githubFetchError: string | null;
 };
 
-function uniqueDefined(numbers: (number | null)[]): number[] {
-  return [...new Set(numbers.filter((n): n is number => n !== null))];
+/** ノードの所属リポジトリ。省略時は run の repo(単一リポジトリで完結する通常の run) */
+function nodeRepo(node: ProgressNode, file: ProgressFile): string {
+  return node.repo ?? file.repo;
+}
+
+/** ノードをリポジトリ単位にまとめる。同じ番号を複数ノードが参照していても1回だけ問い合わせる */
+function collectRefs(file: ProgressFile): RunStateRefs[] {
+  const byRepo = new Map<string, { issueNumbers: Set<number>; prNumbers: Set<number> }>();
+
+  for (const node of file.nodes) {
+    const repo = nodeRepo(node, file);
+    const refs = byRepo.get(repo) ?? { issueNumbers: new Set(), prNumbers: new Set() };
+    if (node.subIssue !== null) refs.issueNumbers.add(node.subIssue);
+    if (node.prNumber !== null) refs.prNumbers.add(node.prNumber);
+    byRepo.set(repo, refs);
+  }
+
+  return [...byRepo].map(([repo, refs]) => ({
+    repo,
+    issueNumbers: [...refs.issueNumbers],
+    prNumbers: [...refs.prNumbers],
+  }));
 }
 
 async function joinOneFile(file: ProgressFile): Promise<JoinedProgressFile> {
-  const issueNumbers = uniqueDefined(file.nodes.map((n) => n.subIssue));
-  const prNumbers = uniqueDefined(file.nodes.map((n) => n.prNumber));
-
   try {
-    const { issues, pullRequests } = await fetchRunGithubState(file.repo, issueNumbers, prNumbers);
+    const { issues, pullRequests } = await fetchRunGithubState(collectRefs(file));
     return {
       ...file,
       githubFetchError: null,
-      nodes: file.nodes.map((node) => ({
-        ...node,
-        githubIssue: node.subIssue !== null ? (issues.get(node.subIssue) ?? null) : null,
-        githubPullRequest: node.prNumber !== null ? (pullRequests.get(node.prNumber) ?? null) : null,
-      })),
+      nodes: file.nodes.map((node) => {
+        const repo = nodeRepo(node, file);
+        return {
+          ...node,
+          githubIssue:
+            node.subIssue !== null ? (issues.get(githubRefKey(repo, node.subIssue)) ?? null) : null,
+          githubPullRequest:
+            node.prNumber !== null
+              ? (pullRequests.get(githubRefKey(repo, node.prNumber)) ?? null)
+              : null,
+        };
+      }),
     };
   } catch (e) {
     // GitHub 側の障害・権限エラーで join できなくても、この run 以外の表示は落とさない(fail-safe)。

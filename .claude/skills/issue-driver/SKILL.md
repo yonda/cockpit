@@ -122,10 +122,12 @@ tmp="${path}.tmp"; printf '%s' "$json" > "$tmp"; mv "$tmp" "$path"
     {
       "key": "t1",
       "title": "…",
+      "repo": "owner/other",               // このノードの subIssue/prNumber が居る repo(任意)。省略時は上の "repo"
+                                           // 親 issue と別リポジトリに sub-issue/PR を作る横断タスクで指定する
       "dependsOn": [],
       "liveStatus": "queued | implementing | reviewing | blocked | handed_off",
       "activity": "実装中: xxx を追加",   // 人が読む一行(任意)
-      "subIssue": 71,                      // GitHub 参照(なければ null)
+      "subIssue": 71,                      // GitHub 参照(なければ null)。上の "repo" ないしノードの "repo" の番号
       "prNumber": 77,                      // GitHub 参照(なければ null)。マージ状態は書かない
       "escalation": null
     }

@@ -19,11 +19,18 @@ type GraphQLOptions = {
   variables?: Record<string, unknown>;
   revalidate?: number;
   tags?: string[];
+  /**
+   * true なら、一部のフィールドが解決できず errors が付いていても data が返っていればそれを使う。
+   * GraphQL は解決できなかった nullable フィールドだけを null にして残りの data を返すので、
+   * 「1つの参照が壊れていても他の参照の結果は使いたい」バッチクエリ向け。
+   * data ごと欠けている(認証エラー等)場合は allowPartialData でも throw する。
+   */
+  allowPartialData?: boolean;
 };
 
 export async function graphql<T>(
   query: string,
-  { variables, revalidate = 0, tags = ["prs"] }: GraphQLOptions = {},
+  { variables, revalidate = 0, tags = ["prs"], allowPartialData = false }: GraphQLOptions = {},
 ): Promise<T> {
   // revalidate = 0 は Next の fetch キャッシュを使わず毎回 GitHub に問い合わせる。
   // (revalidate > 0 は stale-while-revalidate なので、体感でポーリング 2 周分
@@ -59,7 +66,7 @@ export async function graphql<T>(
     throw new GitHubApiError("GitHub API returned invalid JSON", 500, text);
   }
 
-  if (json.errors && json.errors.length > 0) {
+  if (json.errors && json.errors.length > 0 && !(allowPartialData && json.data)) {
     throw new GitHubApiError(
       `GraphQL errors: ${json.errors.map((e) => e.message).join(", ")}`,
       200,
