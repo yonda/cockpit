@@ -4,7 +4,7 @@ import { useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { NAV } from "./navItems";
 
-// 数字キー 1〜4 で NAV の該当ボードへ遷移する。PWA を全画面常駐で使うため、
+// 数字キーで NAV の該当ボードへ遷移する。PWA を全画面常駐で使うため、
 // マウスに手を伸ばさずタブを移動できるようにする。
 export function KeyboardNav() {
   const router = useRouter();
@@ -13,6 +13,10 @@ export function KeyboardNav() {
     const onKeyDown = (event: KeyboardEvent) => {
       // 修飾キー併用時 (Cmd/Ctrl/Alt) はブラウザ標準操作を尊重して無視する
       if (event.metaKey || event.ctrlKey || event.altKey) return;
+
+      // 遷移先は force-dynamic で毎回 RSC を取り直すため、キーリピートをそのまま
+      // 通すと push が連射され再フェッチが積み上がる。押しっぱなしは 1 回として扱う。
+      if (event.repeat) return;
 
       const position = Number(event.key);
       if (!Number.isInteger(position) || position < 1 || position > NAV.length) {
