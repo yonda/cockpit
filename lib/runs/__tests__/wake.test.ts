@@ -38,8 +38,8 @@ describe("selectWakeTargets", () => {
 
   it("担当セッションの連絡先(session)をそのまま運ぶ", () => {
     const session = {
-      agmsgTeam: "cockpit",
-      agmsgAgent: "cockpit-G",
+      sessionName: "cockpit-G",
+      messagingSocket: "/tmp/cc-socks/12345.sock",
       herdrPane: "wE:p1F",
       cwd: "/tmp/wt",
     };

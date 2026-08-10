@@ -5,8 +5,9 @@ import type { ProgressFile, ProgressSession } from "./progress";
  * 進捗ファイル一覧から「今 wake すべき run(＝phase:monitoring)」を選び、
  * 外部の executor(bin/monitor-wake)が つつく／立て直す ために必要な最小情報に落とす。
  *
- * 生死判定(agmsg ready sentinel の有無)や実際の つつき(agmsg send)・立て直し
- * (herdr agent start)は副作用なので、この層には持たせない(launchd 側 executor の仕事)。
+ * 生死判定(メッセージングソケットへの connect 可否)や実際の つつき(ソケットへの
+ * JSON line 書き込み)・立て直し(herdr agent start)は副作用なので、この層には
+ * 持たせない(launchd 側 executor の仕事)。
  * ここは「どの run を対象にするか」を GitHub 権威に触れず決めるだけ。
  *
  * done になった run は phase!=="monitoring" で自然に脱落する(＝wake が止まる)。

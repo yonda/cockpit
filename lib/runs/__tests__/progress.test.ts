@@ -146,15 +146,15 @@ describe("parseProgress", () => {
     const data = JSON.parse(validJson);
     data.phase = "monitoring";
     data.session = {
-      agmsgTeam: "cockpit",
-      agmsgAgent: "cockpit-G",
+      sessionName: "ozma-31",
+      messagingSocket: "/tmp/cc-socks/12345.sock",
       herdrPane: "wE:p1F",
       cwd: "/Users/x/src/cockpit-wt/feature/168",
     };
     const parsed = parseProgress(JSON.stringify(data));
     expect(parsed.session).toEqual({
-      agmsgTeam: "cockpit",
-      agmsgAgent: "cockpit-G",
+      sessionName: "ozma-31",
+      messagingSocket: "/tmp/cc-socks/12345.sock",
       herdrPane: "wE:p1F",
       cwd: "/Users/x/src/cockpit-wt/feature/168",
     });
@@ -162,11 +162,11 @@ describe("parseProgress", () => {
 
   it("session の欠落フィールドは null で埋める", () => {
     const data = JSON.parse(validJson);
-    data.session = { agmsgTeam: "cockpit", agmsgAgent: "cockpit-G" };
+    data.session = { sessionName: "ozma-31", messagingSocket: "/tmp/cc-socks/12345.sock" };
     const parsed = parseProgress(JSON.stringify(data));
     expect(parsed.session).toEqual({
-      agmsgTeam: "cockpit",
-      agmsgAgent: "cockpit-G",
+      sessionName: "ozma-31",
+      messagingSocket: "/tmp/cc-socks/12345.sock",
       herdrPane: null,
       cwd: null,
     });
@@ -178,10 +178,10 @@ describe("parseProgress", () => {
     expect(parseProgress(JSON.stringify(data)).session).toBeNull();
   });
 
-  it("session.agmsgTeam の不正な型で throw する", () => {
+  it("session.messagingSocket の不正な型で throw する", () => {
     const data = JSON.parse(validJson);
-    data.session = { agmsgTeam: 123 };
-    expect(() => parseProgress(JSON.stringify(data))).toThrow(/session\.agmsgTeam/);
+    data.session = { messagingSocket: 123 };
+    expect(() => parseProgress(JSON.stringify(data))).toThrow(/session\.messagingSocket/);
   });
 });
 

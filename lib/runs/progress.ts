@@ -41,14 +41,16 @@ export type ProgressEscalation = {
  * cockpit の wake 機構(#168)が「生きていれば つつく／死んでいたら 立て直す」を
  * 判断するために使う。GitHub 権威の事実ではなく、ライブ層(セッションの所在)を指す。
  *
- * - agmsgTeam / agmsgAgent: つつく(agmsg send)先。生死判定(ready sentinel)にも使う。
+ * - sessionName: Claude Code セッションの表示名(--name / フォルダ名由来)。人が ListAgents で特定する用。
+ * - messagingSocket: セッションの Unix ソケット($CLAUDE_CODE_MESSAGING_SOCKET)。
+ *   つつき(JSON line 書き込み)先。生死判定(connect 可否)にも使う。
  * - herdrPane: herdr 上のペイン/エージェント target(生死判定・立て直しの配置に使う)。
  * - cwd: 立て直し時に使う worktree の絶対パス。
  * どれも不明なら null。
  */
 export type ProgressSession = {
-  agmsgTeam: string | null;
-  agmsgAgent: string | null;
+  sessionName: string | null;
+  messagingSocket: string | null;
   herdrPane: string | null;
   cwd: string | null;
 };
@@ -169,8 +171,8 @@ function parseSession(value: unknown, path: string): ProgressSession | null {
   if (value === undefined || value === null) return null;
   const obj = assertRecord(value, path);
   return {
-    agmsgTeam: assertNullableString(obj.agmsgTeam, `${path}.agmsgTeam`),
-    agmsgAgent: assertNullableString(obj.agmsgAgent, `${path}.agmsgAgent`),
+    sessionName: assertNullableString(obj.sessionName, `${path}.sessionName`),
+    messagingSocket: assertNullableString(obj.messagingSocket, `${path}.messagingSocket`),
     herdrPane: assertNullableString(obj.herdrPane, `${path}.herdrPane`),
     cwd: assertNullableString(obj.cwd, `${path}.cwd`),
   };
