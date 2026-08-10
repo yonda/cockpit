@@ -9,8 +9,10 @@ launchd (com.cockpit.monitor) から一定間隔で実行される想定。監�
   - 対象 (phase:monitoring) は cockpit の /api/wake-targets から取る
     (lib/runs の list 層 + wake 層を再利用。Next プロセスは child_process を
      使えない Turbopack 制約があるので、副作用はこの外部 executor が担う)。
-  - 担当セッションが「生きていれば」agmsg で1通つついて監視ループを1周回させる。
-    生死判定は agmsg の ready sentinel (live watcher が受信中のとき present)。
+  - 担当セッションが「生きていれば」Claude Code のメッセージングソケット
+    ($CLAUDE_CODE_MESSAGING_SOCKET, 進捗ファイルの session.messagingSocket に記録) へ
+    JSON line を書き込んで1通つつき、監視ループを1周回させる (#180)。
+    生死判定はソケットへの connect 可否 (claude 本体も同じ判定を使う)。
   - 「死んでいたら」(セッション消滅・一発 subagent 等) 進捗ファイルに escalation
     (赤旗) を立てて cockpit で可視化し、人間/lead に拾ってもらう。無人での自動
     立て直し (herdr spawn) はこの PR のスコープ外 (別 issue)。赤旗で「静かに詰まる」を防ぐ。
@@ -25,7 +27,7 @@ from __future__ import annotations
 import json
 import os
 import signal
-import subprocess
+import socket
 import sys
 import urllib.request
 from datetime import datetime, timezone
@@ -35,12 +37,11 @@ from datetime import datetime, timezone
 signal.signal(signal.SIGPIPE, signal.SIG_DFL)
 
 HOME = os.path.expanduser("~")
-AGMSG_DIR = os.path.join(HOME, ".agents", "skills", "agmsg")
-SEND_SH = os.path.join(AGMSG_DIR, "scripts", "send.sh")
-ACTAS_LIB = os.path.join(AGMSG_DIR, "scripts", "lib", "actas-lock.sh")
 RUNS_DIR = os.path.join(HOME, ".cache", "cockpit", "runs")
-WAKER_NAME = "cockpit-waker"
 DEFAULT_PORT = 7878
+
+# claude 本体の生死判定 (250ms connect) に合わせつつ、launchd 実行の余裕を持たせる
+CONNECT_TIMEOUT_SEC = 1.0
 
 POKE_BODY = (
     "[cockpit wake] issue {url} の監視ループを1周だけ reconcile してください。"
@@ -51,7 +52,7 @@ POKE_BODY = (
 )
 
 STUCK_DETAIL = (
-    "監視ループの担当セッションが消滅している(agmsg ready sentinel 不在 / 連絡先未記録)。"
+    "監視ループの担当セッションが消滅している(メッセージングソケットに接続不可 / 連絡先未記録)。"
     "cockpit は生きた担当をつつけないため自動では進められない。"
     "人間か lead が issue-driver をこの issue に対して再起動し、監視ループを引き継いでください。"
 )
@@ -97,58 +98,63 @@ def fetch_targets(port):
     return data.get("targets", [])
 
 
-def ready_sentinel_path(team, agent):
-    """agmsg の ready sentinel パスを agmsg 自身のエンコーダで求める。
-
-    ハードコードせず lib を source して呼ぶことで、agmsg 側のエンコード規則が
-    変わっても追随する (誤判定で live なセッションを二重起動しないため)。失敗時 None。
-    """
-    script = (
-        'SKILL_DIR="{0}"; '.format(AGMSG_DIR)
-        + 'source "{0}" >/dev/null 2>&1 || exit 1; '.format(ACTAS_LIB)
-        + 'agmsg_ready_path "$1" "$2"'
-    )
+def _connect(sock_path):
+    """メッセージングソケットに接続する。成功したら socket を返し、失敗は例外。"""
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    s.settimeout(CONNECT_TIMEOUT_SEC)
     try:
-        out = subprocess.run(
-            ["bash", "-c", script, "_", team, agent],
-            capture_output=True, text=True, timeout=10, check=True,
-        ).stdout.strip()
-        return out or None
-    except (subprocess.SubprocessError, OSError):
-        return None
+        s.connect(sock_path)
+    except BaseException:
+        s.close()
+        raise
+    return s
 
 
 def liveness(session):
     """担当セッションの状態を判定する。
 
-    - "alive"   : agmsg 連絡先があり ready sentinel が present → つつく
-    - "dead"    : 連絡先が無い / 連絡先はあるが sentinel が absent → 赤旗(保険)
-    - "unknown" : sentinel パスの算出に失敗(transient) → 触らず次 tick に再評価
+    - "alive"   : messagingSocket が記録されていて connect できる → つつく
+    - "dead"    : 連絡先が無い / ソケットが消えている / connect 拒否 → 赤旗(保険)
+    - "unknown" : connect が想定外の OSError (transient) → 触らず次 tick に再評価
 
     連絡先未記録(#164 の一発 subagent 等)は「つつけない＝生きた担当がいない」ので
     dead 扱いにし、保険(可視化)へ回す。skip して静かに詰まらせない。
+    セッション終了時に claude はソケットファイルを unlink するため、
+    「ファイルが無い / connect 拒否」は死んだと判定してよい。
     """
     session = session or {}
-    team = session.get("agmsgTeam")
-    agent = session.get("agmsgAgent")
-    if not team or not agent:
+    sock_path = session.get("messagingSocket")
+    if not sock_path:
         return "dead"
-    path = ready_sentinel_path(team, agent)
-    if path is None:
+    try:
+        _connect(sock_path).close()
+        return "alive"
+    except (FileNotFoundError, ConnectionRefusedError, socket.timeout):
+        return "dead"
+    except OSError:
         return "unknown"
-    return "alive" if os.path.exists(path) else "dead"
 
 
 def poke(session, url, apply):
-    team, agent = session["agmsgTeam"], session["agmsgAgent"]
+    """メッセージングソケットに JSON line を書き込んで1通つつく。
+
+    形式は claude 本体がログで案内している注入形式:
+      {"type":"user","message":{"role":"user","content":"..."}}
+    """
+    sock_path = session["messagingSocket"]
     if not apply:
-        log("  DRY-RUN would poke agmsg {0}/{1}".format(team, agent))
+        log("  DRY-RUN would poke socket {0}".format(sock_path))
         return
-    subprocess.run(
-        ["bash", SEND_SH, team, WAKER_NAME, agent, POKE_BODY.format(url=url)],
-        capture_output=True, text=True, timeout=20, check=True,
-    )
-    log("  poked agmsg {0}/{1}".format(team, agent))
+    payload = json.dumps(
+        {"type": "user", "message": {"role": "user", "content": POKE_BODY.format(url=url)}},
+        ensure_ascii=False,
+    ) + "\n"
+    s = _connect(sock_path)
+    try:
+        s.sendall(payload.encode("utf-8"))
+    finally:
+        s.close()
+    log("  poked socket {0}".format(sock_path))
 
 
 def progress_path(repo, issue_number):

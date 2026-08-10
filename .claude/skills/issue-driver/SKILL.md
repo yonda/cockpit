@@ -23,7 +23,7 @@ description: Use when you are handed a single GitHub issue and asked to drive it
 2. **大きな外部影響**：破壊的変更・データ移行・公開 API 変更など、後戻りが重く影響範囲の大きい決定
 3. **解けないブロッカー**：権限・認証・環境・依存の欠落など、自力で越えられない障害。ただし**即エスカレーションしない**——同じブロッカーに対して複数パターンの自己修復を試し、それでも解決しない時に初めて「解けない」と判定する（無限リトライも避ける）。
 
-この3つ以外で止まってはいけない。「念のため確認」「どちらが好みか」で人間を止めない。エスカレーションする時は **状況・選択肢・あなたの推奨** を明確にして進捗ファイルに記録し（cockpit が赤表示する）、環境に通知手段があれば（agmsg 等）人間/lead に通知する。
+この3つ以外で止まってはいけない。「念のため確認」「どちらが好みか」で人間を止めない。エスカレーションする時は **状況・選択肢・あなたの推奨** を明確にして進捗ファイルに記録し（cockpit が赤表示する）、環境に通知手段があれば（SendMessage によるセッション間メッセージ等）人間/lead に通知する。
 
 ## フロー
 
@@ -72,7 +72,7 @@ description: Use when you are handed a single GitHub issue and asked to drive it
 ### 6. PR を出す（まだ完走ではない）
 - 各サブタスク（ソロなら1つ）の draft PR を作成（`gh pr create --draft`、issue と対応 sub-issue を参照）。見送った指摘・要判断点を PR 本文に明示。直列依存の PR は `--base` を依存元ブランチに（§3）。
 - **→ 進捗ファイル**：該当ノードを `liveStatus: "handed_off"` ＋ `prNumber`。全ノードの PR が出たら `phase: "monitoring"`。
-- **→ 進捗ファイル（監視の連絡先を残す）**：`phase: "monitoring"` に入るとき、トップレベルに **`session`（担当セッションの連絡先）** を書く（§進捗ファイルのスキーマ参照）。cockpit の wake 機構（#168）が「生きていれば つつく／死んでいたら 赤旗で可視化」を判断するのに使う。agmsg で協調しているなら自分のチーム名・エージェント名を、herdr 上なら pane・worktree の cwd を入れる。**この情報を残さないと cockpit はあなたを起こせない**（連絡先未記録は「起こせない＝死んだ」扱いになり保険側へ回る）。分からない項目は `null`。
+- **→ 進捗ファイル（監視の連絡先を残す）**：`phase: "monitoring"` に入るとき、トップレベルに **`session`（担当セッションの連絡先）** を書く（§進捗ファイルのスキーマ参照）。cockpit の wake 機構（#168）が「生きていれば つつく／死んでいたら 赤旗で可視化」を判断するのに使う。**自分のメッセージングソケットのパス**（Bash から `echo $CLAUDE_CODE_MESSAGING_SOCKET` で読める）と**セッション名**（`--name` またはフォルダ名由来。ListAgents / `/status` で確認できる）を入れ、herdr 上なら pane・worktree の cwd も入れる。**この情報を残さないと cockpit はあなたを起こせない**（連絡先未記録は「起こせない＝死んだ」扱いになり保険側へ回る）。分からない項目は `null`。
 - 人間に「レビュー・マージをどうぞ」と提示し、**§7 監視ループに入る**（停止しない）。
 
 ### 7. 監視ループ（親 issue が完全に片付くまで）
@@ -97,7 +97,7 @@ PR を出したら、**その issue の全 PR がマージされるまで生き�
 
 **回し方（基盤非依存）**：ループは「一定間隔で（上の4点セットを）GitHub から reconcile する」とだけ規定する。実際の起床（wake）は環境が提供する手段に委ねる。**自分でホットループを回して待たない**（トークンを浪費する）。1周 reconcile したら**待機に戻る**（herdr ペイン等で生きたまま idle。idle は入力待ちなのでトークンを食わない）。かつ **stateless-recoverable**：kill されても再 kick 時に GitHub＋進捗ファイルから状態を再構築してループを再開できること（§stateless-recoverable）。マージは絶対にしない——検知して反応するだけ。
 
-**cockpit の wake 機構（#168）で起こされる**：cockpit は `phase: "monitoring"` の run を一定間隔で検知し、あなたが**生きて待機していれば** agmsg で「1周 reconcile して」と1通つついてくる。それを受けたら**この節のループを1周だけ**回して待機に戻る（つつきを合図に動く。自分でタイマーを持たない）。だから §6 で **`session` 連絡先を必ず残す**こと——これが「つつく先」になる。
+**cockpit の wake 機構（#168）で起こされる**：cockpit は `phase: "monitoring"` の run を一定間隔で検知し、あなたが**生きて待機していれば**（進捗ファイルに記録されたメッセージングソケットに接続できれば）そのソケット経由で「1周 reconcile して」と1通つついてくる。それを受けたら**この節のループを1周だけ**回して待機に戻る（つつきを合図に動く。自分でタイマーを持たない）。だから §6 で **`session` 連絡先を必ず残す**こと——これが「つつく先」になる。
 
 **死んだら赤旗（保険）**：あなたが**死んでいたら**（セッション消滅・クラッシュ等）、cockpit はつつけないので進捗ファイルに **escalation（赤旗）を立てて可視化**し、人間/lead に「issue-driver を再起動して監視ループを引き継いで」と促す（無人での自動立て直しは現状しない＝静かに詰まらせない保険）。したがって **wake 手段の無い一発 subagent** として起動され、monitoring 中に生き続けられないと分かっているなら、`monitoring` で停止する前に**自分で escalation を書いておく**（「監視ループを継続できる主体がいない。人間/lead が引き継ぎを」）。黙って止まると、次の wake tick で cockpit 側が赤旗を立てるまで気づかれない。生きて待機できるなら、それが最善（つつかれて自走が続く）。
 
@@ -127,7 +127,8 @@ tmp="${path}.tmp"; printf '%s' "$json" > "$tmp"; mv "$tmp" "$path"
   "updatedAt": "<ISO8601>",
   "escalation": null,   // または { "reason": "spec_conflict|external_impact|blocker", "detail": "…", "options": ["…"], "recommendation": "…", "at": "<ISO8601>" }
   "session": null,      // 監視の連絡先(§6 で phase:monitoring に入るとき記録)。cockpit の wake 機構(#168)が「つつく/赤旗」判断に使う。無ければ null
-                        // 例: { "agmsgTeam": "cockpit", "agmsgAgent": "cockpit-G", "herdrPane": "wE:p1F", "cwd": "/…/cockpit-wt/feature/168" } — 不明な項目は null
+                        // 例: { "sessionName": "ozma-31", "messagingSocket": "/tmp/cc-socks/12345.sock", "herdrPane": "wE:p1F", "cwd": "/…/cockpit-wt/feature/168" } — 不明な項目は null
+                        // messagingSocket は自分の Bash から `echo $CLAUDE_CODE_MESSAGING_SOCKET` で得る(cockpit はここに接続できるかで生死を判定し、つつきを書き込む)
   "nodes": [
     {
       "key": "t1",
@@ -159,7 +160,7 @@ tmp="${path}.tmp"; printf '%s' "$json" > "$tmp"; mv "$tmp" "$path"
 
 ## teammates の立て方（大きい issue）
 
-- teammate の spawn は**環境が提供する手段**を使う（agmsg の spawn/send、または Task subagent 等）。特定の基盤に依存した書き方をしない。
+- teammate の spawn は**環境が提供する手段**を使う（Agent ツールの subagent、herdr の pane spawn 等。teammate との連絡は SendMessage）。特定の基盤に依存した書き方をしない。
 - **worktree パスとブランチ名は lead が一意に採番して teammate に渡す**（teammate に自前生成させない）。並行 teammate が `$(date +%s)` 等で自前生成すると値が衝突し、同一ディレクトリで作業して互いの変更が混入する。命名は分解ツリー由来の一意キー（例: `issue-<issueNumber>/<subIssueNumber>`）にする。
 - 各 teammate には担当サブタスク（対応する sub-issue）＋割り当てた worktree/ブランチを渡し、「実装 → セルフレビュー → draft PR → lead に報告」させる。**teammate は自己終了せず lead に結果（PR URL・サマリ）を報告**する。
 - lead はサブタスク間の依存を管理し、報告を受けてレビューし、親 issue の完走可否を判断する。詰まった teammate の救出も lead の仕事（それでも越えられなければエスカレーション条件3）。
