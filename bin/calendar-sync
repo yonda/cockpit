@@ -9,6 +9,7 @@ Next.js プロセス内で child_process を使わずに済む (Turbopack 制約
 """
 
 import hashlib
+import html
 import json
 import os
 import re
@@ -24,6 +25,7 @@ CACHE_FILE = os.path.join(CACHE_DIR, "calendar-today.json")
 EVENT_SEP = "@@E@@"
 FIELD_SEP = "@@F@@"
 TIME_RE = re.compile(r"\b(\d{2}):(\d{2})\b")
+HTML_TAG_RE = re.compile(r"<[^>]+>")
 MEET_RE = re.compile(r"https://meet\.google\.com/[a-z0-9-]+")
 ZOOM_RE = re.compile(r"https://[a-z0-9.]*zoom\.us/j/[^\s\"'<>]+")
 
@@ -50,6 +52,11 @@ def iso_today(hh: int, mm: int) -> str:
     return now.replace(hour=hh, minute=mm, second=0, microsecond=0).isoformat()
 
 
+def strip_html(text: str) -> str:
+    """外部連携がタイトルに HTML を入れて予定を作ることがあるため、タグを落とす。"""
+    return html.unescape(HTML_TAG_RE.sub("", text)).strip()
+
+
 def parse_events(raw: str) -> list[dict]:
     events = []
     for chunk in raw.split(EVENT_SEP):
@@ -59,7 +66,7 @@ def parse_events(raw: str) -> list[dict]:
         fields = chunk.split(FIELD_SEP)
         if len(fields) < 2:
             continue
-        dt_field, title = fields[0].strip(), fields[1].strip()
+        dt_field, title = fields[0].strip(), strip_html(fields[1].strip())
 
         times = TIME_RE.findall(dt_field)
         if times:
