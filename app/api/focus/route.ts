@@ -18,9 +18,10 @@ export async function POST(request: Request) {
     return NextResponse.json({ ok: false, error: "invalid json" }, { status: 400 });
   }
 
-  const { workspaceId, tabId } = (body ?? {}) as {
+  const { workspaceId, tabId, paneId } = (body ?? {}) as {
     workspaceId?: unknown;
     tabId?: unknown;
+    paneId?: unknown;
   };
   if (typeof workspaceId !== "string" || workspaceId === "") {
     return NextResponse.json(
@@ -34,11 +35,19 @@ export async function POST(request: Request) {
       { status: 400 },
     );
   }
+  if (paneId !== undefined && typeof paneId !== "string") {
+    return NextResponse.json(
+      { ok: false, error: "paneId must be a string" },
+      { status: 400 },
+    );
+  }
 
   try {
-    await focusHerdrTarget(workspaceId, tabId);
+    await focusHerdrTarget(workspaceId, tabId, paneId);
     await execFileAsync("open", ["-a", "WezTerm"]);
-    console.log(`[focus] ok workspace=${workspaceId} tab=${tabId ?? "-"}`);
+    console.log(
+      `[focus] ok workspace=${workspaceId} tab=${tabId ?? "-"} pane=${paneId ?? "-"}`,
+    );
     return NextResponse.json({ ok: true });
   } catch (err) {
     const message =

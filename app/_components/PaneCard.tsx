@@ -46,7 +46,7 @@ const statusConfig: Record<
   },
 };
 
-function StatusPill({ status }: { status: HerdrStatus }) {
+export function StatusPill({ status }: { status: HerdrStatus }) {
   const s = statusConfig[status];
   const Icon = s.icon;
   return (
