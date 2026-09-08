@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { sendHerdrPrompt } from "@/lib/herdr/server";
+import { isSameOriginRequest } from "@/lib/http/sameOrigin";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -13,6 +14,14 @@ export async function POST(
   { params }: { params: Promise<{ paneId: string }> },
 ) {
   const { paneId } = await params;
+
+  // pane へのテキスト送信はコマンド実行に直結する。別サイトからの CSRF を弾く
+  if (!isSameOriginRequest(request)) {
+    return NextResponse.json(
+      { ok: false, error: "cross-origin request rejected" },
+      { status: 403 },
+    );
+  }
 
   let body: unknown;
   try {

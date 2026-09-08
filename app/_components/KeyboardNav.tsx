@@ -3,6 +3,7 @@
 import { useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { NAV } from "./navItems";
+import { isTypingTarget } from "./isTypingTarget";
 
 // 数字キーで NAV の該当ボードへ遷移する。PWA を全画面常駐で使うため、
 // マウスに手を伸ばさずタブを移動できるようにする。
@@ -24,18 +25,7 @@ export function KeyboardNav() {
       }
 
       // テキスト入力中はショートカットを奪わない
-      const active = document.activeElement;
-      if (active instanceof HTMLElement) {
-        const tag = active.tagName;
-        if (
-          tag === "INPUT" ||
-          tag === "TEXTAREA" ||
-          tag === "SELECT" ||
-          active.isContentEditable
-        ) {
-          return;
-        }
-      }
+      if (isTypingTarget(document.activeElement)) return;
 
       event.preventDefault();
       router.push(NAV[position - 1].href);

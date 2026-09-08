@@ -10,7 +10,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
 import { Crosshair, Send } from "lucide-react";
-import type { HerdrPane, HerdrStatus, HerdrWorkspace } from "@/lib/herdr/types";
+import type { HerdrPane, HerdrWorkspace } from "@/lib/herdr/types";
 import {
   buildHerdrTree,
   defaultSelectedPaneId,
@@ -19,7 +19,8 @@ import {
   type HerdrTreeTab,
   type HerdrTreeWorkspace,
 } from "@/lib/herdr/tree";
-import { StatusPill } from "./PaneCard";
+import { StatusPill, statusDotClass, useFocusPane } from "./PaneCard";
+import { isTypingTarget } from "./isTypingTarget";
 import { ErrorState } from "./ErrorState";
 import { EmptyRow } from "./EmptyState";
 import { SectionSkeleton } from "./Skeleton";
@@ -32,24 +33,8 @@ const SCREEN_LINES = 80;
 
 type ScreenSource = "recent" | "visible";
 
-const STATUS_DOT: Record<HerdrStatus, string> = {
-  working: "bg-[var(--signal-info)]",
-  blocked: "bg-[var(--signal-alert)]",
-  done: "bg-[var(--signal-ok)]",
-  idle: "bg-[var(--signal-idle)]",
-  unknown: "bg-[var(--ink-faint)]",
-};
-
 function paneTitle(pane: HerdrPane): string | null {
   return pane.title ?? pane.recap?.title ?? pane.terminalTitle ?? null;
-}
-
-function isTypingTarget(el: Element | null): boolean {
-  if (!(el instanceof HTMLElement)) return false;
-  const tag = el.tagName;
-  return (
-    tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || el.isContentEditable
-  );
 }
 
 // ---------------------------------------------------------------- 左列: 木
@@ -77,7 +62,7 @@ function PaneRow({
     >
       <span
         className={`mt-[6px] inline-block h-1.5 w-1.5 shrink-0 rounded-full ${
-          STATUS_DOT[pane.agent ? pane.agentStatus : "unknown"]
+          statusDotClass(pane.agent ? pane.agentStatus : "unknown")
         }`}
       />
       <span className="flex min-w-0 flex-1 flex-col gap-0.5">
@@ -168,7 +153,7 @@ function WorkspaceBlock({
           {workspace.number < Number.MAX_SAFE_INTEGER ? workspace.number : "·"}
         </span>
         <span
-          className={`inline-block h-1.5 w-1.5 shrink-0 rounded-full ${STATUS_DOT[workspace.agentStatus]}`}
+          className={`inline-block h-1.5 w-1.5 shrink-0 rounded-full ${statusDotClass(workspace.agentStatus)}`}
         />
         <span
           className={`min-w-0 flex-1 truncate font-mono text-[12px] font-semibold uppercase tracking-[0.08em] ${
@@ -238,9 +223,9 @@ type ScreenResult =
     }
   | { status: "error"; message: string };
 
-// pane オブジェクトは herdr の状態が更新されるたび (SSE → refetch) に
-// 作り直されるので、その参照変化を「画面を取り直す合図」に使う。
-function useScreen(paneId: string, source: ScreenSource, pane: HerdrPane) {
+// statusKey: agent の状態が変わったとき (working → idle 等) にも即座に
+// 取り直すための合図。pane オブジェクトの参照は SSE のたびに変わるので使わない。
+function useScreen(paneId: string, source: ScreenSource, statusKey: string) {
   const [screen, setScreen] = useState<ScreenResult>({ status: "loading" });
   const [nonce, setNonce] = useState(0);
   const refresh = useCallback(() => setNonce((n) => n + 1), []);
@@ -294,7 +279,7 @@ function useScreen(paneId: string, source: ScreenSource, pane: HerdrPane) {
       cancelled = true;
       if (timer) clearTimeout(timer);
     };
-  }, [paneId, source, pane, nonce]);
+  }, [paneId, source, statusKey, nonce]);
 
   return { screen, refresh };
 }
@@ -390,7 +375,13 @@ function PromptForm({
 
   const onKeyDown = (e: ReactKeyboardEvent<HTMLTextAreaElement>) => {
     // Enter で送信、Shift+Enter で改行。IME 変換中の Enter は無視する
-    if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+    // (keyCode 229 は WebKit が変換中に送る値)
+    if (
+      e.key === "Enter" &&
+      !e.shiftKey &&
+      !e.nativeEvent.isComposing &&
+      e.nativeEvent.keyCode !== 229
+    ) {
       e.preventDefault();
       void submit();
     }
@@ -406,7 +397,6 @@ function PromptForm({
           onKeyDown={onKeyDown}
           rows={1}
           placeholder={isAgent ? "prompt to this agent" : "command for this shell"}
-          disabled={pending}
           className="max-h-40 min-h-[24px] flex-1 resize-y bg-transparent font-mono text-[12px] text-[var(--ink)] outline-none placeholder:text-[var(--ink-faint)]"
         />
         <button
@@ -434,34 +424,14 @@ function PaneDetail({
   workspace: HerdrWorkspace | null;
 }) {
   const [source, setSource] = useState<ScreenSource>("recent");
-  const { screen, refresh } = useScreen(pane.paneId, source, pane);
-  const [focusPending, setFocusPending] = useState(false);
+  const { screen, refresh } = useScreen(pane.paneId, source, pane.agentStatus);
+  const { focus, pending: focusPending } = useFocusPane(pane);
 
   const title = paneTitle(pane);
   const displayCwd = pane.foregroundCwd ?? pane.cwd;
   const branch = screen.status === "ok" ? screen.branch : null;
   const tokens = Object.entries(pane.tokens);
   const labels = Object.entries(pane.stateLabels);
-
-  const focus = async () => {
-    if (focusPending) return;
-    setFocusPending(true);
-    try {
-      await fetch("/api/focus", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          workspaceId: pane.workspaceId,
-          tabId: pane.tabId,
-          paneId: pane.paneId,
-        }),
-      });
-    } catch {
-      /* ignore */
-    } finally {
-      setFocusPending(false);
-    }
-  };
 
   return (
     <section className="flex min-w-0 flex-col gap-3 border border-[var(--hairline)] bg-[var(--background)] p-3">

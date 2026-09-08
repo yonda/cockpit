@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { NextResponse } from "next/server";
 import { focusHerdrTarget } from "@/lib/herdr/server";
+import { isSameOriginRequest } from "@/lib/http/sameOrigin";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -11,6 +12,13 @@ const execFileAsync = promisify(execFile);
 // ブラウザとサーバーが同じ Mac にいる前提の機能:
 // herdr の workspace/tab をフォーカスし、WezTerm を前面に出す。
 export async function POST(request: Request) {
+  if (!isSameOriginRequest(request)) {
+    return NextResponse.json(
+      { ok: false, error: "cross-origin request rejected" },
+      { status: 403 },
+    );
+  }
+
   let body: unknown;
   try {
     body = await request.json();

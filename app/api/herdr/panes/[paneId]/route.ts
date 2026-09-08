@@ -58,14 +58,14 @@ export async function GET(
     : DEFAULT_LINES;
 
   try {
-    const { pane, rawCwd } = await getHerdrPane(paneId);
-    const [screen, branch] = await Promise.all([
+    // pane.get は git 用の生 cwd を得るためだけに呼ぶ。pane.read と並列に流す
+    const [{ rawCwd }, screen] = await Promise.all([
+      getHerdrPane(paneId),
       readHerdrPane(paneId, source, lines),
-      currentBranch(rawCwd),
     ]);
+    const branch = await currentBranch(rawCwd);
     return NextResponse.json({
       ok: true,
-      pane,
       branch,
       screen: { ...screen, source, lines },
     });

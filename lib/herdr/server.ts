@@ -206,10 +206,25 @@ export async function fetchHerdrState(): Promise<HerdrState> {
   return { workspaces, tabs, panes };
 }
 
+function errorCode(response: HerdrResponse): string | null {
+  if (!response.error) return null;
+  const err = response.error as { code?: unknown };
+  return typeof err.code === "string" ? err.code : null;
+}
+
 function errorMessage(response: HerdrResponse): string | null {
   if (!response.error) return null;
   const err = response.error as { message?: unknown };
-  return typeof err.message === "string" ? err.message : JSON.stringify(response.error);
+  const message =
+    typeof err.message === "string" ? err.message : JSON.stringify(response.error);
+  const code = errorCode(response);
+  return code ? `${code}: ${message}` : message;
+}
+
+// server がその method を知らない (protocol 差) ときの応答か。
+// 古い server は id 空 + invalid_request で method 一覧を返す。
+function isUnknownMethod(response: HerdrResponse): boolean {
+  return errorCode(response) === "invalid_request" || (!!response.error && !response.id);
 }
 
 function unwrap<T>(response: HerdrResponse, label: string): T {
@@ -257,21 +272,17 @@ export async function readHerdrPane(
   };
 }
 
-// テキストを pane に流し込み、Enter を押す。`herdr pane run` と同じ手順。
+// テキストを pane に流し込み、Enter を押す。pane.send_input は text と keys を
+// 1 リクエストで扱う統合 API で、複数行をまとめて 1 回の入力として送れる
+// (send_text + send_keys に分けると改行ごとに実行される)。
 // agent.prompt (protocol 22) は古い server に無いので使わない。
 export async function sendHerdrPrompt(paneId: string, text: string): Promise<void> {
-  const textResp = await callHerdr({
-    id: "send-text",
-    method: "pane.send_text",
-    params: { pane_id: paneId, text },
+  const resp = await callHerdr({
+    id: "send-input",
+    method: "pane.send_input",
+    params: { pane_id: paneId, text, keys: ["enter"] },
   });
-  unwrap(textResp, "pane.send_text");
-  const keysResp = await callHerdr({
-    id: "send-keys",
-    method: "pane.send_keys",
-    params: { pane_id: paneId, keys: ["Enter"] },
-  });
-  unwrap(keysResp, "pane.send_keys");
+  unwrap(resp, "pane.send_input");
 }
 
 // herdr 上で workspace (と、あれば tab / pane) をフォーカスする。
@@ -306,8 +317,13 @@ export async function focusHerdrTarget(
     params: { pane_id: paneId },
   });
   const paneError = errorMessage(paneResp);
-  if (paneError) {
+  if (!paneError) return;
+  if (isUnknownMethod(paneResp)) {
     // 古い server は pane.focus を知らない。tab まで合っていれば十分。
-    console.warn(`[herdr] pane.focus unavailable: ${paneError}`);
+    // (応答本文は method 一覧で長いので、そのまま log には出さない)
+    console.warn("[herdr] pane.focus unavailable on this server; focused tab only");
+    return;
   }
+  // pane_not_found 等、server が対応しているうえでの失敗は呼び出し元に返す
+  throw new Error(`pane.focus: ${paneError}`);
 }
