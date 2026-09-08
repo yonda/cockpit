@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { NextResponse } from "next/server";
 import { focusHerdrTarget } from "@/lib/herdr/server";
+import { isSameOriginRequest } from "@/lib/http/sameOrigin";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -11,6 +12,13 @@ const execFileAsync = promisify(execFile);
 // ブラウザとサーバーが同じ Mac にいる前提の機能:
 // herdr の workspace/tab をフォーカスし、WezTerm を前面に出す。
 export async function POST(request: Request) {
+  if (!isSameOriginRequest(request)) {
+    return NextResponse.json(
+      { ok: false, error: "cross-origin request rejected" },
+      { status: 403 },
+    );
+  }
+
   let body: unknown;
   try {
     body = await request.json();
@@ -18,9 +26,10 @@ export async function POST(request: Request) {
     return NextResponse.json({ ok: false, error: "invalid json" }, { status: 400 });
   }
 
-  const { workspaceId, tabId } = (body ?? {}) as {
+  const { workspaceId, tabId, paneId } = (body ?? {}) as {
     workspaceId?: unknown;
     tabId?: unknown;
+    paneId?: unknown;
   };
   if (typeof workspaceId !== "string" || workspaceId === "") {
     return NextResponse.json(
@@ -34,11 +43,19 @@ export async function POST(request: Request) {
       { status: 400 },
     );
   }
+  if (paneId !== undefined && typeof paneId !== "string") {
+    return NextResponse.json(
+      { ok: false, error: "paneId must be a string" },
+      { status: 400 },
+    );
+  }
 
   try {
-    await focusHerdrTarget(workspaceId, tabId);
+    await focusHerdrTarget(workspaceId, tabId, paneId);
     await execFileAsync("open", ["-a", "WezTerm"]);
-    console.log(`[focus] ok workspace=${workspaceId} tab=${tabId ?? "-"}`);
+    console.log(
+      `[focus] ok workspace=${workspaceId} tab=${tabId ?? "-"} pane=${paneId ?? "-"}`,
+    );
     return NextResponse.json({ ok: true });
   } catch (err) {
     const message =

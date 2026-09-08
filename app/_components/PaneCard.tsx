@@ -46,7 +46,44 @@ const statusConfig: Record<
   },
 };
 
-function StatusPill({ status }: { status: HerdrStatus }) {
+// 状態を表す小さな点の色クラス。木の行や workspace 見出しで使う
+export function statusDotClass(status: HerdrStatus): string {
+  return statusConfig[status].dot;
+}
+
+// /api/focus を叩いて herdr でその pane を前面に出す。
+// PaneCard と Herdr タブの両方から使うので、送る項目 (workspace / tab / pane)
+// をここ 1 箇所に揃える。
+export function useFocusPane(pane: HerdrPane): {
+  focus: () => Promise<void>;
+  pending: boolean;
+} {
+  const [pending, setPending] = useState(false);
+
+  const focus = async () => {
+    if (pending) return;
+    setPending(true);
+    try {
+      await fetch("/api/focus", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          workspaceId: pane.workspaceId,
+          tabId: pane.tabId,
+          paneId: pane.paneId,
+        }),
+      });
+    } catch {
+      /* ignore */
+    } finally {
+      setPending(false);
+    }
+  };
+
+  return { focus, pending };
+}
+
+export function StatusPill({ status }: { status: HerdrStatus }) {
   const s = statusConfig[status];
   const Icon = s.icon;
   return (
@@ -73,26 +110,7 @@ export function PaneCard({
   const displayCwd = pane.foregroundCwd ?? pane.cwd;
   const cwdLabel = displayCwd.split("/").slice(-2).join("/");
   const recap = pane.recap;
-  const [focusPending, setFocusPending] = useState(false);
-
-  const openInWezTerm = async () => {
-    if (focusPending) return;
-    setFocusPending(true);
-    try {
-      await fetch("/api/focus", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          workspaceId: pane.workspaceId,
-          tabId: pane.tabId,
-        }),
-      });
-    } catch {
-      /* ignore */
-    } finally {
-      setFocusPending(false);
-    }
-  };
+  const { focus: openInWezTerm, pending: focusPending } = useFocusPane(pane);
 
   return (
     <button
