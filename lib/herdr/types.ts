@@ -18,6 +18,31 @@ export type HerdrPane = {
   focused: boolean;
   sessionId: string | null;
   recap?: PaneRecap | null;
+  // 以下は herdr protocol 22 以降でのみ返る。古い server では null / 空。
+  // agent 自身が報告するタイトル (Claude Code の ai-title など)
+  title: string | null;
+  // 端末が OSC で報告するウィンドウタイトル
+  terminalTitle: string | null;
+  // agent が報告するトークン使用量など。キーと値は agent 側の自由記述
+  tokens: Record<string, string>;
+  // agent が報告する状態ラベル (例: branch, pr)
+  stateLabels: Record<string, string>;
+};
+
+export type HerdrTab = {
+  tabId: string;
+  workspaceId: string;
+  number: number;
+  label: string;
+  agentStatus: HerdrStatus;
+  focused: boolean;
+  paneCount: number;
+};
+
+export type HerdrWorktree = {
+  repoName: string;
+  checkoutPath: string;
+  isLinkedWorktree: boolean;
 };
 
 export type HerdrWorkspace = {
@@ -29,10 +54,13 @@ export type HerdrWorkspace = {
   paneCount: number;
   tabCount: number;
   activeTabId: string;
+  // protocol 22 以降でのみ返る
+  worktree: HerdrWorktree | null;
 };
 
 export type HerdrState = {
   workspaces: HerdrWorkspace[];
+  tabs: HerdrTab[];
   panes: HerdrPane[];
 };
 
@@ -60,6 +88,7 @@ export function panesByWorkspace(
       paneCount: (groups.get(pane.workspaceId) ?? []).length,
       tabCount: 0,
       activeTabId: pane.tabId,
+      worktree: null,
     });
   }
 
