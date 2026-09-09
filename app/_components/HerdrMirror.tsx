@@ -11,6 +11,7 @@ import {
 } from "react";
 import { Crosshair, Send } from "lucide-react";
 import type { HerdrPane, HerdrWorkspace } from "@/lib/herdr/types";
+import type { SubagentInfo, SubagentStatus } from "@/lib/claude/subagents";
 import {
   buildHerdrTree,
   defaultSelectedPaneId,
@@ -25,6 +26,7 @@ import { ErrorState } from "./ErrorState";
 import { EmptyRow } from "./EmptyState";
 import { SectionSkeleton } from "./Skeleton";
 import { useHerdrContext, LiveIndicator } from "./useHerdrState";
+import { RelativeTime } from "./RelativeTime";
 
 // 画面テキストの取り直し間隔。herdr の SSE は状態変化しか流さないので、
 // 出力の流れは自前で見に行く。
@@ -78,6 +80,14 @@ function PaneRow({
           {pane.focused ? (
             <span className="text-[9px] uppercase tracking-[0.16em] text-[var(--accent)]">
               · focused
+            </span>
+          ) : null}
+          {pane.subagents && pane.subagents.running > 0 ? (
+            <span
+              className="text-[9px] uppercase tracking-[0.16em] text-[var(--signal-info)]"
+              title={`${pane.subagents.running} subagent(s) running`}
+            >
+              · {pane.subagents.running} sub
             </span>
           ) : null}
         </span>
@@ -219,6 +229,7 @@ type ScreenResult =
       text: string;
       truncated: boolean;
       branch: string | null;
+      subagents: SubagentInfo[];
       fetchedAt: number;
     }
   | { status: "error"; message: string };
@@ -249,6 +260,7 @@ function useScreen(paneId: string, source: ScreenSource, statusKey: string) {
           | {
               ok: true;
               branch: string | null;
+              subagents?: SubagentInfo[];
               screen: { text: string; truncated: boolean };
             }
           | { ok: false; error: string };
@@ -259,6 +271,7 @@ function useScreen(paneId: string, source: ScreenSource, statusKey: string) {
             text: body.screen.text,
             truncated: body.screen.truncated,
             branch: body.branch,
+            subagents: body.subagents ?? [],
             fetchedAt: Date.now(),
           });
         } else {
@@ -416,6 +429,93 @@ function PromptForm({
   );
 }
 
+const SUBAGENT_DONE_PREVIEW = 3;
+
+const SUBAGENT_TONE: Record<SubagentStatus, { dot: string; label: string }> = {
+  running: { dot: "bg-[var(--signal-info)] animate-pulse", label: "text-[var(--signal-info)]" },
+  done: { dot: "bg-[var(--signal-ok)]", label: "text-[var(--ink-muted)]" },
+  stale: { dot: "bg-[var(--signal-warn)]", label: "text-[var(--signal-warn)]" },
+};
+
+function SubagentRow({ sub }: { sub: SubagentInfo }) {
+  const tone = SUBAGENT_TONE[sub.status];
+  const kind = sub.name ?? sub.agentType;
+  return (
+    <li className="flex items-start gap-2 py-1">
+      <span className={`mt-[6px] inline-block h-1.5 w-1.5 shrink-0 rounded-full ${tone.dot}`} />
+      <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+        <div className="flex flex-wrap items-baseline gap-x-2 font-mono text-[11px]">
+          <span className="font-medium text-[var(--ink)]">{kind}</span>
+          {sub.name && sub.name !== sub.agentType ? (
+            <span className="text-[var(--ink-muted)]">{sub.agentType}</span>
+          ) : null}
+          {sub.spawnDepth > 1 ? (
+            <span className="text-[var(--ink-faint)]">depth {sub.spawnDepth}</span>
+          ) : null}
+          <span className={`text-[10px] uppercase tracking-[0.14em] ${tone.label}`}>
+            {sub.status}
+          </span>
+          <span className="flex-1" />
+          <RelativeTime
+            iso={sub.updatedAt}
+            variant="short"
+            className="text-[10px] text-[var(--ink-faint)]"
+          />
+        </div>
+        {sub.description ? (
+          <div className="truncate text-[12px] leading-snug text-[var(--ink-dim)]" title={sub.description}>
+            {sub.description}
+          </div>
+        ) : null}
+        {sub.lastMessage ? (
+          <div className="truncate font-mono text-[11px] text-[var(--ink-muted)]" title={sub.lastMessage}>
+            {sub.lastMessage}
+          </div>
+        ) : null}
+      </div>
+    </li>
+  );
+}
+
+// pane のセッションが起動した subagent。動作中を常に出し、終わったものは
+// 直近数件だけ見せて残りは折りたたむ。
+function SubagentList({ list }: { list: SubagentInfo[] | null }) {
+  const [showAll, setShowAll] = useState(false);
+  if (!list || list.length === 0) return null;
+  const active = list.filter((s) => s.status !== "done");
+  const done = list.filter((s) => s.status === "done");
+  const shownDone = showAll ? done : done.slice(0, SUBAGENT_DONE_PREVIEW);
+  const hidden = done.length - shownDone.length;
+  return (
+    <section className="flex flex-col gap-1 border-t border-[var(--hairline)] pt-2">
+      <div className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.14em] text-[var(--ink-muted)]">
+        <span>subagents</span>
+        <span className="text-[var(--signal-info)]">
+          {active.filter((s) => s.status === "running").length} running
+        </span>
+        <span>/ {list.length}</span>
+      </div>
+      <ul className="flex flex-col divide-y divide-[var(--hairline)]">
+        {active.map((s) => (
+          <SubagentRow key={s.agentId} sub={s} />
+        ))}
+        {shownDone.map((s) => (
+          <SubagentRow key={s.agentId} sub={s} />
+        ))}
+      </ul>
+      {hidden > 0 || showAll ? (
+        <button
+          type="button"
+          onClick={() => setShowAll((v) => !v)}
+          className="self-start font-mono text-[10px] uppercase tracking-[0.14em] text-[var(--ink-muted)] transition hover:text-[var(--accent)]"
+        >
+          {showAll ? "show fewer" : `+${hidden} more done`}
+        </button>
+      ) : null}
+    </section>
+  );
+}
+
 function PaneDetail({
   pane,
   workspace,
@@ -481,6 +581,8 @@ function PaneDetail({
           </div>
         ) : null}
       </header>
+
+      <SubagentList list={screen.status === "ok" ? screen.subagents : null} />
 
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-1 font-mono text-[10px] uppercase tracking-[0.14em]">

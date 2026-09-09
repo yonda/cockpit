@@ -6,6 +6,7 @@ import {
   readHerdrPane,
   type HerdrReadSource,
 } from "@/lib/herdr/server";
+import { readSessionSubagents, type SubagentInfo } from "@/lib/claude/subagents";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -59,14 +60,21 @@ export async function GET(
 
   try {
     // pane.get は git 用の生 cwd を得るためだけに呼ぶ。pane.read と並列に流す
-    const [{ rawCwd }, screen] = await Promise.all([
+    const [{ pane, rawCwd }, screen] = await Promise.all([
       getHerdrPane(paneId),
       readHerdrPane(paneId, source, lines),
     ]);
-    const branch = await currentBranch(rawCwd);
+    const cwds = [pane.foregroundCwd, pane.cwd].filter((d): d is string => Boolean(d));
+    const [branch, subagents] = await Promise.all([
+      currentBranch(rawCwd),
+      pane.sessionId
+        ? readSessionSubagents(pane.sessionId, cwds)
+        : Promise.resolve<SubagentInfo[]>([]),
+    ]);
     return NextResponse.json({
       ok: true,
       branch,
+      subagents,
       screen: { ...screen, source, lines },
     });
   } catch (err) {
