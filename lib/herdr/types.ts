@@ -1,3 +1,5 @@
+import type { SubagentSummary } from "@/lib/claude/subagents";
+
 export type HerdrStatus = "idle" | "working" | "blocked" | "done" | "unknown";
 
 export type PaneRecap = {
@@ -18,6 +20,9 @@ export type HerdrPane = {
   focused: boolean;
   sessionId: string | null;
   recap?: PaneRecap | null;
+  // この pane のセッションが起動した subagent の集計 (transcript 由来)。
+  // Claude Code 以外や transcript が見つからないときは null
+  subagents?: SubagentSummary | null;
   // 以下は herdr protocol 22 以降でのみ返る。古い server では null / 空。
   // agent 自身が報告するタイトル (Claude Code の ai-title など)
   title: string | null;

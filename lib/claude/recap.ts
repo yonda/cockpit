@@ -23,7 +23,7 @@ function projectSlug(dir: string): string {
   return expandHome(dir).replace(/[^a-zA-Z0-9-]/g, "-");
 }
 
-async function resolveTranscriptPath(
+export async function resolveTranscriptPath(
   sessionId: string,
   cwds: string[],
 ): Promise<string | null> {
