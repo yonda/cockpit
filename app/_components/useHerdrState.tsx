@@ -11,6 +11,10 @@ import {
 import type { HerdrState } from "@/lib/herdr/types";
 
 const REFETCH_DEBOUNCE_MS = 300;
+// herdr のイベントは agent の状態変化しか流さない。transcript 由来の情報
+// (subagent の増減、直近のやりとり) はイベントにならないので、画面が見えて
+// いる間は定期的にも取り直す
+const REFETCH_INTERVAL_MS = 5_000;
 
 export type HerdrLoadResult =
   | { status: "loading" }
@@ -60,6 +64,10 @@ export function useHerdrState(): { result: HerdrLoadResult; live: boolean } {
 
     void refetch();
 
+    const interval = setInterval(() => {
+      if (!document.hidden) scheduleRefetch();
+    }, REFETCH_INTERVAL_MS);
+
     const source = new EventSource("/api/panes/events");
     source.addEventListener("open", () => {
       setLive(true);
@@ -75,6 +83,7 @@ export function useHerdrState(): { result: HerdrLoadResult; live: boolean } {
     return () => {
       cancelled = true;
       if (debounceTimer) clearTimeout(debounceTimer);
+      clearInterval(interval);
       source.close();
     };
   }, []);

@@ -3,6 +3,7 @@ import { promisify } from "node:util";
 import { NextResponse, type NextRequest } from "next/server";
 import {
   getHerdrPane,
+  paneCwds,
   readHerdrPane,
   type HerdrReadSource,
 } from "@/lib/herdr/server";
@@ -64,11 +65,10 @@ export async function GET(
       getHerdrPane(paneId),
       readHerdrPane(paneId, source, lines),
     ]);
-    const cwds = [pane.foregroundCwd, pane.cwd].filter((d): d is string => Boolean(d));
     const [branch, subagents] = await Promise.all([
       currentBranch(rawCwd),
       pane.sessionId
-        ? readSessionSubagents(pane.sessionId, cwds)
+        ? readSessionSubagents(pane.sessionId, paneCwds(pane))
         : Promise.resolve<SubagentInfo[]>([]),
     ]);
     return NextResponse.json({

@@ -15,47 +15,63 @@ import {
 } from "../subagents";
 
 const line = (obj: unknown) => JSON.stringify(obj);
-const assistant = (blocks: unknown[]) =>
-  line({ type: "assistant", message: { role: "assistant", content: blocks } });
+// 実際の transcript と同じく、1 ターンの thinking / text / tool_use は別行に書かれ、
+// stop_reason は最終応答の行だけ "end_turn" になる (途中は "tool_use" か null)
+const assistant = (blocks: unknown[], stopReason: string | null = null) =>
+  line({
+    type: "assistant",
+    message: { role: "assistant", content: blocks, stop_reason: stopReason },
+  });
 const user = (blocks: unknown[]) =>
   line({ type: "user", message: { role: "user", content: blocks } });
-const stopHook = line({
-  type: "attachment",
-  attachment: { type: "hook_success", hookEvent: "SubagentStop" },
-});
-const otherHook = line({
-  type: "attachment",
-  attachment: { type: "hook_success", hookEvent: "PostToolUse" },
-});
+const hook = (hookEvent: string) =>
+  line({ type: "attachment", attachment: { type: "hook_success", hookEvent } });
 
 describe("parseTail", () => {
-  it("SubagentStop の記録があれば終了", () => {
-    const tail = [
-      assistant([{ type: "text", text: "調べ終わりました" }]),
-      stopHook,
-    ].join("\n");
+  it("末尾に SubagentStop の記録があれば終了", () => {
+    const tail = [assistant([{ type: "text", text: "調べ終わりました" }]), hook("SubagentStop")].join(
+      "\n",
+    );
     const parsed = parseTail(tail);
     expect(parsed.endedByHook).toBe(true);
     expect(parsed.lastMessage).toBe("調べ終わりました");
   });
 
-  it("tool_use を伴わない assistant で終わっていれば最終応答 (hook 記録が無くても終了扱い)", () => {
+  it("SubagentStop の後に再開して本文が続けば動作中 (途中の Stop は数えない)", () => {
+    const tail = [
+      assistant([{ type: "text", text: "一度終わり" }], "end_turn"),
+      hook("SubagentStop"),
+      user([{ type: "text", text: "続きをやって" }]),
+      hook("SubagentStart"),
+      assistant([{ type: "tool_use", id: "t", name: "Bash", input: {} }], "tool_use"),
+    ].join("\n");
+    const parsed = parseTail(tail);
+    expect(parsed.endedByHook).toBe(false);
+    expect(parsed.finalAnswer).toBe(false);
+  });
+
+  it("stop_reason=end_turn の assistant で終わっていれば最終応答 (hook 記録が無くても終了扱い)", () => {
     const tail = [
       user([{ type: "tool_result", tool_use_id: "x", content: "ok" }]),
-      assistant([{ type: "text", text: "結論: A" }]),
+      assistant([{ type: "text", text: "結論: A" }], "end_turn"),
     ].join("\n");
     const parsed = parseTail(tail);
     expect(parsed.endedByHook).toBe(false);
     expect(parsed.finalAnswer).toBe(true);
   });
 
+  it("thinking / text だけの行で終わっていても、end_turn でなければ動作中 (tool_use 行が続く途中)", () => {
+    expect(parseTail(assistant([{ type: "thinking", thinking: "..." }], "tool_use")).finalAnswer).toBe(
+      false,
+    );
+    expect(parseTail(assistant([{ type: "text", text: "調べます" }], null)).finalAnswer).toBe(false);
+  });
+
   it("assistant が tool_use で終わっていれば動作中 (後ろに別の hook 記録があっても)", () => {
     const tail = [
-      assistant([
-        { type: "text", text: "調べます" },
-        { type: "tool_use", id: "t", name: "Bash", input: {} },
-      ]),
-      otherHook,
+      assistant([{ type: "text", text: "調べます" }], "tool_use"),
+      assistant([{ type: "tool_use", id: "t", name: "Bash", input: {} }], "tool_use"),
+      hook("PostToolUse"),
     ].join("\n");
     const parsed = parseTail(tail);
     expect(parsed.finalAnswer).toBe(false);
@@ -65,7 +81,7 @@ describe("parseTail", () => {
 
   it("tool_result で終わっていれば動作中。壊れた行は無視する", () => {
     const tail = [
-      assistant([{ type: "tool_use", id: "t", name: "Read", input: {} }]),
+      assistant([{ type: "text", text: "x" }], "end_turn"),
       "{not json",
       user([{ type: "tool_result", tool_use_id: "t", content: "..." }]),
     ].join("\n");
@@ -104,14 +120,12 @@ describe("parseMeta", () => {
       agentType: "general-purpose",
       name: "code-review",
       description: "/code-review medium",
-      parentAgentId: null,
       spawnDepth: 1,
     });
     expect(parseMeta("{}")).toEqual({
       agentType: "agent",
       name: null,
       description: null,
-      parentAgentId: null,
       spawnDepth: 1,
     });
     expect(parseMeta("nope")).toBeNull();
@@ -124,11 +138,9 @@ describe("sortSubagents / summarizeSubagents", () => {
     agentType: "general-purpose",
     name: null,
     description: null,
-    parentAgentId: null,
     spawnDepth: 1,
     status,
     lastMessage: null,
-    startedAt: null,
     updatedAt,
   });
 
@@ -166,7 +178,7 @@ describe("readSubagentsDir", () => {
     const sub = join(dir, "subagents");
     writeFileSync(
       join(sub, "agent-aaa.jsonl"),
-      [assistant([{ type: "text", text: "done!" }]), stopHook].join("\n"),
+      [assistant([{ type: "text", text: "done!" }], "end_turn"), hook("SubagentStop")].join("\n"),
     );
     writeFileSync(
       join(sub, "agent-aaa.meta.json"),
@@ -174,7 +186,7 @@ describe("readSubagentsDir", () => {
     );
     writeFileSync(
       join(sub, "agent-bbb.jsonl"),
-      assistant([{ type: "tool_use", id: "t", name: "Bash", input: {} }]),
+      assistant([{ type: "tool_use", id: "t", name: "Bash", input: {} }], "tool_use"),
     );
     // meta 無し + 古い更新時刻 → stale、種類は既定値
     const old = new Date(Date.now() - STALE_AFTER_MS * 2);

@@ -1,13 +1,14 @@
-import { open, readdir, readFile, stat } from "node:fs/promises";
+import { readdir, readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
-import { resolveTranscriptPath } from "./recap";
+import type { SubagentSummary } from "@/lib/herdr/types";
+import { lastTextBlock, readTail, resolveTranscriptPath, truncate } from "./recap";
 
 // Claude Code の subagent (Agent ツール) は親と同じプロセスで動くので、
 // herdr からは見えない。代わりに transcript を読む:
 //   ~/.claude/projects/<slug>/<session-id>/subagents/agent-<id>.jsonl      本文
 //   ~/.claude/projects/<slug>/<session-id>/subagents/agent-<id>.meta.json  種類と説明
-// 動作中かどうかは本文の末尾から判断する (SubagentStop hook の記録、
-// または tool_use を伴わない assistant の最終応答があれば終了)。
+// 動作中かどうかは本文の末尾から判断する (末尾が SubagentStop hook の記録、
+// または stop_reason=end_turn の assistant 応答なら終了)。
 
 export type SubagentStatus = "running" | "done" | "stale";
 
@@ -18,15 +19,11 @@ export type SubagentInfo = {
   // スキル経由で起動したときの名前 (例: code-review)。無ければ null
   name: string | null;
   description: string | null;
-  parentAgentId: string | null;
   spawnDepth: number;
   status: SubagentStatus;
   lastMessage: string | null;
-  startedAt: string | null;
   updatedAt: string;
 };
-
-export type SubagentSummary = { running: number; total: number };
 
 const TAIL_BYTES = 64 * 1024;
 // 終了の記録が無いまま更新が止まって 30 分経ったら、止まったものとみなす
@@ -39,14 +36,17 @@ type Meta = {
   agentType: string;
   name: string | null;
   description: string | null;
-  parentAgentId: string | null;
   spawnDepth: number;
 };
 
 export type ParsedTail = {
-  // SubagentStop hook の記録が末尾側にある
+  // 末尾 (それ以降に本文の記録が無い位置) に SubagentStop hook の記録がある。
+  // 一度止まった subagent が SendMessage で再開されると、その後に本文が続くので
+  // 途中の SubagentStop は数えない
   endedByHook: boolean;
-  // 最後の主要レコードが tool_use を伴わない assistant (= 最終応答)
+  // 最後の assistant 記録が stop_reason=end_turn (= 最終応答)。
+  // 1 ターンは thinking / text / tool_use が別行で書かれるため、
+  // 「最後の行に tool_use が無い」では途中の行を最終応答と誤認する
   finalAnswer: boolean;
   lastMessage: string | null;
 };
@@ -68,40 +68,13 @@ export function parseMeta(raw: string): Meta | null {
     agentType: str(data.agentType) ?? "agent",
     name: str(data.name),
     description: str(data.description),
-    parentAgentId: str(data.parentAgentId),
     spawnDepth: typeof data.spawnDepth === "number" ? data.spawnDepth : 1,
   };
 }
 
-function lastTextBlock(content: unknown): string | null {
-  if (typeof content === "string") return content;
-  if (!Array.isArray(content)) return null;
-  for (let i = content.length - 1; i >= 0; i--) {
-    const block = content[i] as { type?: string; text?: string } | null;
-    if (block && block.type === "text" && typeof block.text === "string") {
-      return block.text;
-    }
-  }
-  return null;
-}
-
-function hasToolUse(content: unknown): boolean {
-  return (
-    Array.isArray(content) &&
-    content.some(
-      (b) => b && typeof b === "object" && (b as { type?: string }).type === "tool_use",
-    )
-  );
-}
-
-function truncate(text: string, max = 200): string {
-  const oneLine = text.replace(/\s+/g, " ").trim();
-  return oneLine.length > max ? `${oneLine.slice(0, max)}…` : oneLine;
-}
-
 export function parseTail(tail: string): ParsedTail {
   let endedByHook = false;
-  let lastMain: { type: string; toolUse: boolean } | null = null;
+  let finalAnswer = false;
   let lastMessage: string | null = null;
 
   for (const line of tail.split("\n")) {
@@ -109,7 +82,7 @@ export function parseTail(tail: string): ParsedTail {
     let record: {
       type?: string;
       attachment?: { hookEvent?: string };
-      message?: { content?: unknown };
+      message?: { content?: unknown; stop_reason?: unknown };
     };
     try {
       record = JSON.parse(line);
@@ -117,27 +90,26 @@ export function parseTail(tail: string): ParsedTail {
       continue;
     }
     if (record.type === "attachment") {
-      if (record.attachment?.hookEvent === "SubagentStop") endedByHook = true;
+      const event = record.attachment?.hookEvent;
+      if (event === "SubagentStop") endedByHook = true;
+      else if (event === "SubagentStart") endedByHook = false;
       continue;
     }
     if (record.type === "assistant") {
-      const content = record.message?.content;
-      const text = lastTextBlock(content);
+      endedByHook = false;
+      const text = lastTextBlock(record.message?.content);
       if (text) {
         const cleaned = truncate(text);
         if (cleaned) lastMessage = cleaned;
       }
-      lastMain = { type: "assistant", toolUse: hasToolUse(content) };
+      finalAnswer = record.message?.stop_reason === "end_turn";
     } else if (record.type === "user") {
-      lastMain = { type: "user", toolUse: false };
+      endedByHook = false;
+      finalAnswer = false;
     }
   }
 
-  return {
-    endedByHook,
-    finalAnswer: lastMain?.type === "assistant" && !lastMain.toolUse,
-    lastMessage,
-  };
+  return { endedByHook, finalAnswer, lastMessage };
 }
 
 export function resolveStatus(
@@ -174,20 +146,6 @@ export function subagentsDirFor(transcriptPath: string): string {
   return join(base, "subagents");
 }
 
-async function readTail(path: string, size: number): Promise<string> {
-  const handle = await open(path, "r");
-  try {
-    const start = Math.max(0, size - TAIL_BYTES);
-    const length = size - start;
-    const buffer = Buffer.alloc(length);
-    await handle.read(buffer, 0, length, start);
-    const text = buffer.toString("utf8");
-    return start > 0 ? text.slice(text.indexOf("\n") + 1) : text;
-  } finally {
-    await handle.close();
-  }
-}
-
 async function readMeta(path: string): Promise<Meta | null> {
   const cached = metaCache.get(path);
   if (cached !== undefined) return cached;
@@ -208,10 +166,10 @@ async function readOne(
   now: number,
 ): Promise<SubagentInfo | null> {
   const transcriptPath = join(dir, `agent-${agentId}${TRANSCRIPT_SUFFIX}`);
-  let info: { mtimeMs: number; size: number; birthtimeMs: number };
+  let info: { mtimeMs: number; size: number };
   try {
     const s = await stat(transcriptPath);
-    info = { mtimeMs: s.mtimeMs, size: s.size, birthtimeMs: s.birthtimeMs };
+    info = { mtimeMs: s.mtimeMs, size: s.size };
   } catch {
     return null;
   }
@@ -222,11 +180,11 @@ async function readOne(
     parsed = cached.parsed;
   } else {
     try {
-      parsed = parseTail(await readTail(transcriptPath, info.size));
+      parsed = parseTail(await readTail(transcriptPath, info.size, TAIL_BYTES));
     } catch {
       return null;
     }
-    tailCache.set(transcriptPath, { mtimeMs: info.mtimeMs, size: info.size, parsed });
+    tailCache.set(transcriptPath, { ...info, parsed });
   }
 
   const meta = await readMeta(join(dir, `agent-${agentId}${META_SUFFIX}`));
@@ -235,11 +193,9 @@ async function readOne(
     agentType: meta?.agentType ?? "agent",
     name: meta?.name ?? null,
     description: meta?.description ?? null,
-    parentAgentId: meta?.parentAgentId ?? null,
     spawnDepth: meta?.spawnDepth ?? 1,
     status: resolveStatus(parsed, info.mtimeMs, now),
     lastMessage: parsed.lastMessage,
-    startedAt: info.birthtimeMs > 0 ? new Date(info.birthtimeMs).toISOString() : null,
     updatedAt: new Date(info.mtimeMs).toISOString(),
   };
 }
