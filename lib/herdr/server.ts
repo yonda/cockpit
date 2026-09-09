@@ -186,6 +186,11 @@ function toPane(p: unknown): HerdrPane {
   };
 }
 
+// transcript 探索などに使う cwd 候補 (前面プロセスの cwd を優先)
+export function paneCwds(pane: HerdrPane): string[] {
+  return [pane.foregroundCwd, pane.cwd].filter((d): d is string => Boolean(d));
+}
+
 export async function fetchHerdrState(): Promise<HerdrState> {
   const [wsResp, tabResp, paneResp] = await Promise.all([
     callHerdr({ id: "workspaces", method: "workspace.list", params: {} }),

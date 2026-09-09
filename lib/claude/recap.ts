@@ -11,6 +11,10 @@ const TAIL_BYTES = 256 * 1024;
 type CacheEntry = { mtimeMs: number; size: number; recap: PaneRecap };
 const recapCache = new Map<string, CacheEntry>();
 const pathCache = new Map<string, string>();
+// 見つからなかった sessionId も短時間は覚えておく。毎回の全プロジェクト走査
+// (readdir + stat × プロジェクト数) を数秒おきのポーリングで繰り返さないため
+const MISS_TTL_MS = 30_000;
+const missCache = new Map<string, number>();
 
 function expandHome(p: string): string {
   if (p === "~") return homedir();
@@ -23,12 +27,14 @@ function projectSlug(dir: string): string {
   return expandHome(dir).replace(/[^a-zA-Z0-9-]/g, "-");
 }
 
-async function resolveTranscriptPath(
+export async function resolveTranscriptPath(
   sessionId: string,
   cwds: string[],
 ): Promise<string | null> {
   const cached = pathCache.get(sessionId);
   if (cached) return cached;
+  const missedAt = missCache.get(sessionId);
+  if (missedAt !== undefined && Date.now() - missedAt < MISS_TTL_MS) return null;
 
   const candidates = cwds.map(
     (dir) => join(PROJECTS_DIR, projectSlug(dir), `${sessionId}.jsonl`),
@@ -59,6 +65,7 @@ async function resolveTranscriptPath(
   } catch {
     // projects dir unreadable
   }
+  missCache.set(sessionId, Date.now());
   return null;
 }
 
@@ -78,7 +85,7 @@ function firstTextBlock(content: unknown): string | null {
   return null;
 }
 
-function lastTextBlock(content: unknown): string | null {
+export function lastTextBlock(content: unknown): string | null {
   if (typeof content === "string") return content;
   if (!Array.isArray(content)) return null;
   for (let i = content.length - 1; i >= 0; i--) {
@@ -95,20 +102,24 @@ function lastTextBlock(content: unknown): string | null {
   return null;
 }
 
-function truncate(text: string, max = 200): string {
+export function truncate(text: string, max = 200): string {
   const oneLine = text.replace(/\s+/g, " ").trim();
   return oneLine.length > max ? `${oneLine.slice(0, max)}…` : oneLine;
 }
 
-async function readTail(path: string, size: number): Promise<string> {
+// ファイル末尾 bytes 分を読む。途中から読んだ場合は先頭の欠けた行を捨てる
+export async function readTail(
+  path: string,
+  size: number,
+  bytes: number = TAIL_BYTES,
+): Promise<string> {
   const handle = await open(path, "r");
   try {
-    const start = Math.max(0, size - TAIL_BYTES);
+    const start = Math.max(0, size - bytes);
     const length = size - start;
     const buffer = Buffer.alloc(length);
     await handle.read(buffer, 0, length, start);
     const text = buffer.toString("utf8");
-    // 途中から読んだ場合、先頭の欠けた行を捨てる
     return start > 0 ? text.slice(text.indexOf("\n") + 1) : text;
   } finally {
     await handle.close();
