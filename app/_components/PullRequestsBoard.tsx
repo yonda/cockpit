@@ -149,7 +149,7 @@ export async function PullRequestsBoard() {
     buckets.waiting.mine.length + buckets.waiting.review.length;
 
   return (
-    <div className="flex flex-col gap-14">
+    <div className="flex flex-col gap-10">
       {nowSection(buckets)}
       {soonSection(buckets)}
       <TierSection

@@ -43,23 +43,22 @@ const stateConfig: Record<
   },
 };
 
+// PullRequestCard の 3 段目の右側に置く。カードの高さを抑えるため
+// ラベルは付けず、アバターの状態ドットと title で誰がどの状態かを伝える。
 export function ReviewerRow({ reviewers }: { reviewers: Reviewer[] }) {
-  return (
-    <div className="flex items-center gap-3">
-      <span className="font-mono text-[11px] uppercase tracking-[0.08em] text-[var(--ink-muted)]">
-        Reviewers
+  if (reviewers.length === 0) {
+    return (
+      <span className="font-mono text-[11px] uppercase tracking-[0.08em] text-[var(--ink-faint)]">
+        no reviewer
       </span>
-      {reviewers.length === 0 ? (
-        <span className="font-mono text-[12px] uppercase tracking-widest text-[var(--ink-faint)]">
-          — none —
-        </span>
-      ) : (
-        <div className="flex flex-wrap gap-2">
-          {reviewers.map((r) => (
-            <ReviewerAvatar key={r.key} reviewer={r} />
-          ))}
-        </div>
-      )}
+    );
+  }
+  return (
+    <div className="flex flex-wrap items-center gap-1.5">
+      <span className="sr-only">Reviewers</span>
+      {reviewers.map((r) => (
+        <ReviewerAvatar key={r.key} reviewer={r} />
+      ))}
     </div>
   );
 }
@@ -71,28 +70,28 @@ function ReviewerAvatar({ reviewer }: { reviewer: Reviewer }) {
   return (
     <span className="relative inline-flex" title={title}>
       <span
-        className={`inline-flex h-7 w-7 items-center justify-center overflow-hidden bg-[var(--background-elevated)] ${cfg.ringClass}`}
+        className={`inline-flex h-5 w-5 items-center justify-center overflow-hidden bg-[var(--background-elevated)] ${cfg.ringClass}`}
         style={{ borderRadius: reviewer.isTeam ? 3 : 999 }}
       >
         {reviewer.avatarUrl ? (
           <Image
             src={reviewer.avatarUrl}
             alt={reviewer.displayName}
-            width={28}
-            height={28}
-            className="h-7 w-7 object-cover"
+            width={20}
+            height={20}
+            className="h-5 w-5 object-cover"
             unoptimized
           />
         ) : (
-          <span className="font-mono text-[10px] text-[var(--ink-muted)]">
+          <span className="font-mono text-[8px] text-[var(--ink-muted)]">
             {reviewer.displayName.slice(0, 2).toUpperCase()}
           </span>
         )}
       </span>
       <span
-        className={`absolute -bottom-0.5 -right-0.5 inline-flex h-3 w-3 items-center justify-center rounded-full ${cfg.dotClass} ring-1 ring-[var(--panel)]`}
+        className={`absolute -bottom-0.5 -right-0.5 inline-flex h-2.5 w-2.5 items-center justify-center rounded-full ${cfg.dotClass} ring-1 ring-[var(--panel)]`}
       >
-        <cfg.Icon size={8} />
+        <cfg.Icon size={7} />
       </span>
     </span>
   );

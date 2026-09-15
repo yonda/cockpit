@@ -124,7 +124,7 @@ export function SubGroup({
   cards: PullRequestCardType[];
 }) {
   return (
-    <div className="flex flex-col gap-3">
+    <div className="flex flex-col gap-2">
       <h3 className="flex items-baseline gap-2 font-mono text-[12px] uppercase tracking-[0.1em] text-[var(--ink-dim)]">
         <span>{title}</span>
         <span className="normal-case tracking-normal text-[var(--ink-muted)]">
@@ -136,7 +136,7 @@ export function SubGroup({
           — none —
         </div>
       ) : (
-        <div className="flex flex-col gap-3">
+        <div className="flex flex-col gap-2">
           {cards.map((pr) => (
             <PullRequestCard key={pr.id} pr={pr} />
           ))}
@@ -173,7 +173,7 @@ export function SingleGroupSection({
       {cards.length === 0 ? (
         <EmptyState message={emptyMessage} />
       ) : (
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-3">
           {cards.map((pr) => (
             <PullRequestCard key={pr.id} pr={pr} />
           ))}
