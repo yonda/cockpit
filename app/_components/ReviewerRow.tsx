@@ -54,7 +54,8 @@ export function ReviewerRow({ reviewers }: { reviewers: Reviewer[] }) {
     );
   }
   return (
-    <div className="flex flex-wrap items-center gap-1.5" aria-label="Reviewers">
+    <div className="flex flex-wrap items-center gap-1.5">
+      <span className="sr-only">Reviewers</span>
       {reviewers.map((r) => (
         <ReviewerAvatar key={r.key} reviewer={r} />
       ))}
