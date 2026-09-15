@@ -19,7 +19,7 @@ export function Badge({
 }) {
   return (
     <span
-      className={`inline-flex items-center gap-1 border px-1.5 py-0.5 font-mono text-[11.5px] font-semibold uppercase tracking-[0.08em] ${variantClasses[variant]}`}
+      className={`inline-flex items-center gap-1 border px-1.5 py-px font-mono text-[11px] font-semibold uppercase tracking-[0.08em] ${variantClasses[variant]}`}
     >
       {children}
     </span>
