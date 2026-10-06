@@ -48,8 +48,8 @@ export default function Dashboard() {
         </div>
 
         {/* 2 列表示のときだけスクロールに追従させる。top はヘッダ (約 74px) + 余白。
-            画面より高いときは列の中でスクロールできるようにする */}
-        <div className="lg:sticky lg:top-[98px] lg:max-h-[calc(100vh-122px)] lg:self-start lg:overflow-y-auto">
+            画面より高いときは列の中でスクロールできるようにする (スクロールバーは隠す) */}
+        <div className="lg:sticky lg:top-[98px] lg:max-h-[calc(100vh-122px)] lg:self-start lg:overflow-y-auto lg:[scrollbar-width:none]">
           <SectionBoundary title="today">
             <div className="flex flex-col gap-6">
               <BoardColumnHeader
