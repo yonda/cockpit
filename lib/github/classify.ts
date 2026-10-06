@@ -8,7 +8,6 @@ export type ClassifiedCard = PullRequestCard & {
 export type ClassifiedBuckets = {
   now: { mine: ClassifiedCard[]; review: ClassifiedCard[] };
   soon: { mine: ClassifiedCard[]; review: ClassifiedCard[] };
-  waiting: { mine: ClassifiedCard[]; review: ClassifiedCard[] };
 };
 
 export function classifyMinePR(pr: PullRequestCard): Tier {
@@ -22,14 +21,13 @@ export function classifyMinePR(pr: PullRequestCard): Tier {
   }
   // Approve 済みで CI も終わっている = あとは自分がマージするだけ
   if (pr.reviewDecision === "APPROVED" && pr.statusCheckRollup !== "PENDING") return "now";
-  // Draft を解除したのにレビュアー未アサイン (リクエストもレビューもゼロ) =
-  // まだボールは自分側にあるので Parked にしない
-  if (pr.reviewers.length === 0) return "soon";
-  return "waiting";
+  // それ以外 (レビュー待ち・レビュアー未アサイン・Approve 後の CI 実行中) は
+  // マージまで追いかけたいので Working に置く
+  return "soon";
 }
 
 export function classifyReviewRequest(pr: PullRequestCard): Tier {
-  // レビュー済みでもマージまでは追いかけたいので Parked にせず Working に置く
+  // レビュー済みでもマージまでは追いかけたいので Working に置く
   if (pr.viewerHasReviewed) return "soon";
   // CI 実行中はまだレビューするタイミングじゃないので「じきに」へ
   if (pr.statusCheckRollup === "PENDING") return "soon";
@@ -44,7 +42,6 @@ export function classify(
   const buckets: ClassifiedBuckets = {
     now: { mine: [], review: [] },
     soon: { mine: [], review: [] },
-    waiting: { mine: [], review: [] },
   };
 
   for (const pr of mine) {

@@ -15,7 +15,7 @@ export default function PullRequestsPage() {
           <h1 className="font-mono text-[18px] font-bold uppercase tracking-[0.14em] text-[var(--accent)]">
             Pull Requests
           </h1>
-          <HintTooltip hint="needs you · working · parked — the full board" />
+          <HintTooltip hint="needs you · working — the full board" />
         </div>
 
         <div className="h-px w-full bg-gradient-to-r from-[var(--accent)]/50 via-[var(--hairline-strong)] to-transparent" />

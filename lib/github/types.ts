@@ -62,7 +62,7 @@ export type PullRequestCard = {
   reviewers: Reviewer[];
 };
 
-export type Tier = "now" | "soon" | "waiting";
+export type Tier = "now" | "soon";
 
 export type CardOrigin = "mine" | "review";
 
