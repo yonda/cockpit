@@ -37,6 +37,8 @@ export type PullRequestCard = {
   // fork からの PR は "owner:branch"、それ以外はブランチ名だけ
   headBranchLabel: string;
   baseRefName: string;
+  // 取れないときは null
+  defaultBranchName: string | null;
   authorLogin: string;
   authorAvatarUrl: string;
   isDraft: boolean;

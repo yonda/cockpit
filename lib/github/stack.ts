@@ -5,8 +5,8 @@ export type StackInfo = {
   rootId: string;
   // ベースを 1 とした段数
   position: number;
-  // stack 全体の PR 数
-  size: number;
+  // stack の一番上の段数。枝分かれしていても同じ段は同じ数になる
+  height: number;
   // 1 つ下の PR の番号。ベースなら null
   parentNumber: number | null;
 };
@@ -15,8 +15,22 @@ export type StackIndex = Map<string, StackInfo>;
 
 type StackNode = Pick<
   PullRequestCard,
-  "id" | "number" | "repositoryNameWithOwner" | "headBranchLabel" | "baseRefName"
+  | "id"
+  | "number"
+  | "repositoryNameWithOwner"
+  | "headBranchLabel"
+  | "baseRefName"
+  | "defaultBranchName"
 >;
+
+// develop や release/* のように長く使うブランチを head にした PR (リリース用の PR など) は、
+// そこへ向けた PR がすべて「上に積まれた」ように見えてしまうので親にしない
+const LONG_LIVED_BRANCH = /^(main|master|develop|development|staging|production|release([/-].*)?)$/;
+
+function canBeParent(node: StackNode): boolean {
+  if (node.headBranchLabel === node.defaultBranchName) return false;
+  return !LONG_LIVED_BRANCH.test(node.headBranchLabel);
+}
 
 // 「ある PR の base = 別の PR の head」を親子としてたどり、2 件以上つながったものを stack とみなす。
 // 一覧にある PR だけでつなぐので、途中の PR が一覧に無ければそこで切れる。
@@ -25,41 +39,51 @@ export function buildStackIndex(cards: StackNode[]): StackIndex {
   for (const card of cards) byId.set(card.id, card);
   const nodes = [...byId.values()];
 
-  const byHead = new Map<string, StackNode>();
+  const keyOf = (repo: string, branch: string) => `${repo}\0${branch}`;
+  // 同じ head ブランチの PR が複数あると親を決められないので、そのブランチではつながない
+  const byHead = new Map<string, StackNode | null>();
   for (const node of nodes) {
-    byHead.set(`${node.repositoryNameWithOwner}\0${node.headBranchLabel}`, node);
+    if (!canBeParent(node)) continue;
+    const key = keyOf(node.repositoryNameWithOwner, node.headBranchLabel);
+    byHead.set(key, byHead.has(key) ? null : node);
   }
   const parentOf = (node: StackNode) =>
-    byHead.get(`${node.repositoryNameWithOwner}\0${node.baseRefName}`);
+    byHead.get(keyOf(node.repositoryNameWithOwner, node.baseRefName)) ?? undefined;
 
-  const chainOf = (node: StackNode): StackNode[] => {
+  // ベースまでたどった列を返す。ブランチが循環していたら stack として扱わない
+  const chainOf = (node: StackNode): StackNode[] | null => {
     const chain = [node];
     const seen = new Set([node.id]);
-    let parent = parentOf(node);
-    while (parent && !seen.has(parent.id)) {
+    for (let parent = parentOf(node); parent; parent = parentOf(parent)) {
+      if (seen.has(parent.id)) return null;
       chain.push(parent);
       seen.add(parent.id);
-      parent = parentOf(parent);
     }
     return chain;
   };
 
-  const chains = new Map(nodes.map((node) => [node.id, chainOf(node)]));
+  const chains = new Map<string, StackNode[]>();
+  for (const node of nodes) {
+    const chain = chainOf(node);
+    if (chain) chains.set(node.id, chain);
+  }
+
   const sizeByRoot = new Map<string, number>();
+  const heightByRoot = new Map<string, number>();
   for (const chain of chains.values()) {
     const rootId = chain[chain.length - 1].id;
     sizeByRoot.set(rootId, (sizeByRoot.get(rootId) ?? 0) + 1);
+    heightByRoot.set(rootId, Math.max(heightByRoot.get(rootId) ?? 0, chain.length));
   }
 
   const index: StackIndex = new Map();
   for (const [id, chain] of chains) {
     const rootId = chain[chain.length - 1].id;
-    const size = sizeByRoot.get(rootId) ?? 1;
-    if (size < 2) continue;
+    if ((sizeByRoot.get(rootId) ?? 0) < 2) continue;
     index.set(id, {
       rootId,
       position: chain.length,
-      size,
+      height: heightByRoot.get(rootId) ?? chain.length,
       parentNumber: chain[1]?.number ?? null,
     });
   }
@@ -96,7 +120,9 @@ export function groupByStack<T extends { id: string; number: number }>(
   for (const group of stackGroups.values()) {
     group.cards = orderFromBase(group.cards, index);
   }
-  return groups.map((g) => (g.kind === "stack" && g.cards.length === 1 ? { kind: "single", card: g.cards[0] } : g));
+  return groups.map((g) =>
+    g.kind === "stack" && g.cards.length === 1 ? { kind: "single", card: g.cards[0] } : g,
+  );
 }
 
 // ベースから枝ごとに上までたどる順に並べる。枝分かれしても 1 本の枝が途切れずに続く
@@ -110,7 +136,9 @@ function orderFromBase<T extends { id: string; number: number }>(
     const parent = index.get(card.id)?.parentNumber ?? null;
     // 親がこの区分に無ければ、区分内では一番下として扱う
     const key = parent !== null && numbers.has(parent) ? parent : null;
-    children.set(key, [...(children.get(key) ?? []), card]);
+    const siblings = children.get(key);
+    if (siblings) siblings.push(card);
+    else children.set(key, [card]);
   }
   const ordered: T[] = [];
   const visit = (key: number | null) => {

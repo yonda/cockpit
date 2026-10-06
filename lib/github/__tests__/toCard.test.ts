@@ -19,7 +19,7 @@ function makeNode(overrides: Partial<GraphQLPullRequestNode> = {}): GraphQLPullR
     baseRefName: "main",
     isCrossRepository: false,
     headRepositoryOwner: { login: "owner" },
-    repository: { nameWithOwner: "owner/name" },
+    repository: { nameWithOwner: "owner/name", defaultBranchRef: { name: "main" } },
     author: { login: "me", avatarUrl: "" },
     comments: { totalCount: 0 },
     reviewThreads: { totalCount: 0 },

@@ -8,15 +8,16 @@ function pr(number: number, head: string, base: string, repo = "owner/name") {
     repositoryNameWithOwner: repo,
     headBranchLabel: head,
     baseRefName: base,
+    defaultBranchName: "main",
   };
 }
 
 describe("buildStackIndex", () => {
   it("base = 別の PR の head をたどってベースから段数を振る", () => {
     const index = buildStackIndex([pr(3, "c", "b"), pr(1, "a", "main"), pr(2, "b", "a")]);
-    expect(index.get("PR_1")).toEqual({ rootId: "PR_1", position: 1, size: 3, parentNumber: null });
-    expect(index.get("PR_2")).toEqual({ rootId: "PR_1", position: 2, size: 3, parentNumber: 1 });
-    expect(index.get("PR_3")).toEqual({ rootId: "PR_1", position: 3, size: 3, parentNumber: 2 });
+    expect(index.get("PR_1")).toEqual({ rootId: "PR_1", position: 1, height: 3, parentNumber: null });
+    expect(index.get("PR_2")).toEqual({ rootId: "PR_1", position: 2, height: 3, parentNumber: 1 });
+    expect(index.get("PR_3")).toEqual({ rootId: "PR_1", position: 3, height: 3, parentNumber: 2 });
   });
 
   it("どこにも積まれていない PR は stack にしない", () => {
@@ -34,11 +35,39 @@ describe("buildStackIndex", () => {
     const index = buildStackIndex([pr(1, "a", "main"), pr(3, "c", "b"), pr(4, "d", "c")]);
     expect(index.has("PR_1")).toBe(false);
     expect(index.get("PR_3")?.position).toBe(1);
-    expect(index.get("PR_4")).toMatchObject({ rootId: "PR_3", position: 2, size: 2 });
+    expect(index.get("PR_4")).toMatchObject({ rootId: "PR_3", position: 2, height: 2 });
   });
 
-  it("ブランチが循環していても無限ループにならない", () => {
-    expect(() => buildStackIndex([pr(1, "a", "b"), pr(2, "b", "a")])).not.toThrow();
+  it("ブランチが循環していたら stack にしない", () => {
+    const index = buildStackIndex([pr(1, "a", "b"), pr(2, "b", "a"), pr(3, "x", "a")]);
+    expect(index.size).toBe(0);
+  });
+
+  it("枝分かれしても分母は一番上の段数になる", () => {
+    const index = buildStackIndex([pr(1, "a", "main"), pr(2, "b", "a"), pr(3, "c", "a"), pr(4, "d", "b")]);
+    expect([1, 2, 3, 4].map((n) => index.get(`PR_${n}`)?.position)).toEqual([1, 2, 2, 3]);
+    expect(index.get("PR_4")?.height).toBe(3);
+  });
+
+  it("develop や release/* を head にした PR は親にしない", () => {
+    const index = buildStackIndex([
+      pr(10, "develop", "main"),
+      pr(11, "feature/a", "develop"),
+      pr(20, "release/1.0", "main"),
+      pr(21, "hotfix", "release/1.0"),
+    ]);
+    expect(index.size).toBe(0);
+  });
+
+  it("デフォルトブランチを head にした PR は親にしない", () => {
+    const trunk = { ...pr(10, "trunk", "release"), defaultBranchName: "trunk" };
+    const index = buildStackIndex([trunk, { ...pr(11, "feature/a", "trunk"), defaultBranchName: "trunk" }]);
+    expect(index.size).toBe(0);
+  });
+
+  it("同じ head ブランチの PR が 2 件あればそのブランチではつながない", () => {
+    const index = buildStackIndex([pr(20, "fix", "main"), pr(21, "fix", "release-1.x"), pr(22, "y", "fix")]);
+    expect(index.size).toBe(0);
   });
 });
 

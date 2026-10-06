@@ -44,7 +44,7 @@ export type GraphQLPullRequestNode = {
   baseRefName: string;
   isCrossRepository: boolean;
   headRepositoryOwner: { login: string } | null;
-  repository: { nameWithOwner: string };
+  repository: { nameWithOwner: string; defaultBranchRef: { name: string } | null };
   author: { login: string; avatarUrl: string } | null;
   comments: { totalCount: number };
   reviewThreads: { totalCount: number };
@@ -155,6 +155,7 @@ export function toPullRequestCard(node: GraphQLPullRequestNode): PullRequestCard
         ? `${node.headRepositoryOwner.login}:${node.headRefName}`
         : node.headRefName,
     baseRefName: node.baseRefName,
+    defaultBranchName: node.repository.defaultBranchRef?.name ?? null,
     authorLogin: node.author?.login ?? "ghost",
     authorAvatarUrl: node.author?.avatarUrl ?? "",
     isDraft: node.isDraft,

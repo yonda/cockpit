@@ -19,6 +19,9 @@ export const PULL_REQUEST_CARD_FRAGMENT = /* GraphQL */ `
     }
     repository {
       nameWithOwner
+      defaultBranchRef {
+        name
+      }
     }
     author {
       login

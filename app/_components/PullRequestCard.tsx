@@ -44,10 +44,16 @@ export function PullRequestCard({
           {stack ? (
             <span className="flex shrink-0 items-center gap-1 self-center text-[var(--accent)]">
               <Layers size={11} />
-              {stack.position}/{stack.size}
+              {stack.position}/{stack.height}
               <span className="text-[var(--ink-muted)]">
                 {stack.parentNumber === null ? "base" : `on #${stack.parentNumber}`}
               </span>
+            </span>
+          ) : isOffDefaultBase(pr) ? (
+            // 親の PR が一覧に無くても、デフォルト以外に向いていることだけは見せる
+            <span className="flex shrink-0 items-center gap-1 self-center text-[var(--ink-muted)]">
+              <Layers size={11} />
+              stacked
             </span>
           ) : null}
         </div>
@@ -118,4 +124,8 @@ export function PullRequestCard({
       </div>
     </a>
   );
+}
+
+function isOffDefaultBase(pr: PullRequestCardType): boolean {
+  return pr.defaultBranchName !== null && pr.baseRefName !== pr.defaultBranchName;
 }

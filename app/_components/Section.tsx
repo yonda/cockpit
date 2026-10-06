@@ -78,7 +78,7 @@ export type TierSectionProps = {
   emptyMessage: string;
   // 狭いカラム内に置くとき subgroup を横並びにせず縦に積む
   stackSubgroups?: boolean;
-  stacks?: StackIndex;
+  stacks: StackIndex;
 };
 
 export function TierSection({
@@ -127,11 +127,11 @@ export function TierSection({
 export function SubGroup({
   title,
   cards,
-  stacks = new Map(),
+  stacks,
 }: {
   title: string;
   cards: PullRequestCardType[];
-  stacks?: StackIndex;
+  stacks: StackIndex;
 }) {
   return (
     <div className="flex flex-col gap-2">
