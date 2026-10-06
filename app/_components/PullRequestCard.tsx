@@ -1,12 +1,12 @@
 import Image from "next/image";
-import { AlertTriangle, Check, CircleDashed, MessageSquare, ThumbsUp, X } from "lucide-react";
+import { AlertTriangle, Check, CircleDashed, GitBranch, MessageSquare, ThumbsUp, X } from "lucide-react";
 import { Badge } from "./Badge";
 import { RelativeTime } from "./RelativeTime";
 import { ReviewerRow } from "./ReviewerRow";
 import type { PullRequestCard as PullRequestCardType } from "@/lib/github/types";
 
 // 1 画面に入る件数を優先し 3 段に収める:
-//   1. repo / #番号 と状態バッジ
+//   1. repo / #番号 / ブランチ と状態バッジ
 //   2. タイトル
 //   3. 作者 / 更新時刻 / 差分 とレビュアー
 // 表示する項目は減らさず、段の統合と余白の削減だけで高さを下げる。
@@ -24,12 +24,23 @@ export function PullRequestCard({ pr }: { pr: PullRequestCardType }) {
       />
 
       <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
-        <div className="flex min-w-0 items-baseline gap-2 font-mono text-[12px] font-medium">
-          <span className="truncate text-[var(--ink-dim)]">
+        {/* basis-0 で幅を要求しないので、バッジが入る限り 1 段目に並び、ブランチ名側が省略される */}
+        <div className="flex min-w-0 flex-1 basis-0 items-baseline gap-2 font-mono text-[12px] font-medium">
+          <span className="max-w-[50%] shrink-0 truncate text-[var(--ink-dim)]">
             {pr.repositoryNameWithOwner}
           </span>
           <span className="shrink-0 text-[var(--ink-muted)]">
             #{pr.number}
+          </span>
+          <span
+            className="flex min-w-0 items-center gap-1 self-center text-[var(--ink-muted)]"
+            title={`${pr.headBranchLabel} → ${pr.baseRefName}`}
+          >
+            <GitBranch size={11} className="shrink-0" />
+            <span className="truncate">
+              {pr.headBranchLabel}
+              {!pr.baseIsDefaultBranch && ` → ${pr.baseRefName}`}
+            </span>
           </span>
         </div>
 

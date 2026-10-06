@@ -11,8 +11,17 @@ export const PULL_REQUEST_CARD_FRAGMENT = /* GraphQL */ `
     deletions
     reviewDecision
     mergeable
+    headRefName
+    baseRefName
+    isCrossRepository
+    headRepositoryOwner {
+      login
+    }
     repository {
       nameWithOwner
+      defaultBranchRef {
+        name
+      }
     }
     author {
       login
