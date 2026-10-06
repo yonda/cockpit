@@ -29,7 +29,8 @@ export function classifyMinePR(pr: PullRequestCard): Tier {
 }
 
 export function classifyReviewRequest(pr: PullRequestCard): Tier {
-  if (pr.viewerHasReviewed) return "waiting";
+  // レビュー済みでもマージまでは追いかけたいので Parked にせず Working に置く
+  if (pr.viewerHasReviewed) return "soon";
   // CI 実行中はまだレビューするタイミングじゃないので「じきに」へ
   if (pr.statusCheckRollup === "PENDING") return "soon";
   return "now";
@@ -58,12 +59,12 @@ export function classify(
     reviewIds.add(pr.id);
   }
 
-  // 自分が APPROVE したまま未マージのものを HOLD に。
+  // 自分が APPROVE したまま未マージのものを Working に。
   // review-requested クエリと重複するものは既に入っているのでスキップする
   for (const pr of reviewedByMe) {
     if (reviewIds.has(pr.id)) continue;
     if (pr.viewerLatestReviewState !== "APPROVED") continue;
-    buckets.waiting.review.push({ ...pr, origin: "review", tier: "waiting" });
+    buckets.soon.review.push({ ...pr, origin: "review", tier: "soon" });
   }
 
   return buckets;

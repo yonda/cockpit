@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { classifyMinePR } from "../classify";
+import { classify, classifyMinePR, classifyReviewRequest } from "../classify";
 import type { PullRequestCard } from "../types";
 
 function makePR(overrides: Partial<PullRequestCard> = {}): PullRequestCard {
@@ -52,5 +52,28 @@ describe("classifyMinePR", () => {
 
   it("レビュー待ちは waiting", () => {
     expect(classifyMinePR(makePR())).toBe("waiting");
+  });
+});
+
+describe("classifyReviewRequest", () => {
+  it("未レビューで CI 成功なら now", () => {
+    expect(classifyReviewRequest(makePR())).toBe("now");
+  });
+
+  it("CI 実行中なら soon", () => {
+    expect(classifyReviewRequest(makePR({ statusCheckRollup: "PENDING" }))).toBe("soon");
+  });
+
+  it("レビュー済みなら soon", () => {
+    expect(classifyReviewRequest(makePR({ viewerHasReviewed: true }))).toBe("soon");
+  });
+});
+
+describe("classify", () => {
+  it("自分が Approve したまま未マージの PR は soon.review に入る", () => {
+    const pr = makePR({ id: "PR_2", viewerLatestReviewState: "APPROVED" });
+    const buckets = classify([], [], [pr]);
+    expect(buckets.soon.review.map((c) => c.id)).toEqual(["PR_2"]);
+    expect(buckets.waiting.review).toEqual([]);
   });
 });

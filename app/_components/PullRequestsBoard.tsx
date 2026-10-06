@@ -61,10 +61,10 @@ function soonSection(
       tone="soon"
       label="Working"
       totalCount={soonTotal}
-      hint="your drafts · un-drafted but no reviewer assigned · review requests with ci still running"
+      hint="your drafts · un-drafted but no reviewer assigned · review requests with ci still running · reviewed by you, not merged"
       subgroups={[
         { title: "yours · draft / no reviewer", cards: buckets.soon.mine },
-        { title: "review requests · ci running", cards: buckets.soon.review },
+        { title: "review requests · ci running / reviewed", cards: buckets.soon.review },
       ]}
       emptyMessage="nothing queued up"
       stackSubgroups={stackSubgroups}
@@ -105,7 +105,7 @@ const PR_TIER_META = {
   soon: {
     subgroups: (b: Awaited<ReturnType<typeof fetchBuckets>>) => [
       { title: "yours · draft / no reviewer", cards: b.soon.mine },
-      { title: "review requests · ci running", cards: b.soon.review },
+      { title: "review requests · ci running / reviewed", cards: b.soon.review },
     ],
     emptyMessage: "nothing queued up",
   },
@@ -170,11 +170,8 @@ export async function PullRequestsBoard() {
         tone="hold"
         label="Parked"
         totalCount={waitingTotal}
-        hint="awaiting reviewer · approved-by-you not merged"
-        subgroups={[
-          { title: "yours · waiting", cards: buckets.waiting.mine },
-          { title: "approved by you · not merged", cards: buckets.waiting.review },
-        ]}
+        hint="awaiting reviewer"
+        subgroups={[{ title: "yours · waiting", cards: buckets.waiting.mine }]}
         emptyMessage="nothing on hold"
         stacks={buckets.stacks}
       />
