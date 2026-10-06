@@ -34,6 +34,10 @@ export type PullRequestCard = {
   title: string;
   url: string;
   repositoryNameWithOwner: string;
+  headRefName: string;
+  baseRefName: string;
+  // base がリポジトリのデフォルトブランチなら true。カードでは base を省略する
+  baseIsDefaultBranch: boolean;
   authorLogin: string;
   authorAvatarUrl: string;
   isDraft: boolean;
