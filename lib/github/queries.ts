@@ -13,6 +13,10 @@ export const PULL_REQUEST_CARD_FRAGMENT = /* GraphQL */ `
     mergeable
     headRefName
     baseRefName
+    isCrossRepository
+    headRepositoryOwner {
+      login
+    }
     repository {
       nameWithOwner
       defaultBranchRef {

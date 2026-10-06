@@ -27,7 +27,7 @@ type LatestReview = {
   author: { login: string; avatarUrl: string } | null;
 };
 
-type GraphQLPullRequestNode = {
+export type GraphQLPullRequestNode = {
   __typename: string;
   id: string;
   number: number;
@@ -42,6 +42,8 @@ type GraphQLPullRequestNode = {
   mergeable: Mergeable;
   headRefName: string;
   baseRefName: string;
+  isCrossRepository: boolean;
+  headRepositoryOwner: { login: string } | null;
   repository: { nameWithOwner: string; defaultBranchRef: { name: string } | null };
   author: { login: string; avatarUrl: string } | null;
   comments: { totalCount: number };
@@ -148,9 +150,15 @@ export function toPullRequestCard(node: GraphQLPullRequestNode): PullRequestCard
     title: node.title,
     url: node.url,
     repositoryNameWithOwner: node.repository.nameWithOwner,
-    headRefName: node.headRefName,
+    headBranchLabel:
+      node.isCrossRepository && node.headRepositoryOwner
+        ? `${node.headRepositoryOwner.login}:${node.headRefName}`
+        : node.headRefName,
     baseRefName: node.baseRefName,
-    baseIsDefaultBranch: node.baseRefName === node.repository.defaultBranchRef?.name,
+    // デフォルトブランチが分からないときは省略側に倒す
+    baseIsDefaultBranch:
+      node.repository.defaultBranchRef === null ||
+      node.baseRefName === node.repository.defaultBranchRef.name,
     authorLogin: node.author?.login ?? "ghost",
     authorAvatarUrl: node.author?.avatarUrl ?? "",
     isDraft: node.isDraft,

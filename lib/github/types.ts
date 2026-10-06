@@ -34,7 +34,8 @@ export type PullRequestCard = {
   title: string;
   url: string;
   repositoryNameWithOwner: string;
-  headRefName: string;
+  // fork からの PR は "owner:branch"、それ以外はブランチ名だけ
+  headBranchLabel: string;
   baseRefName: string;
   // base がリポジトリのデフォルトブランチなら true。カードでは base を省略する
   baseIsDefaultBranch: boolean;

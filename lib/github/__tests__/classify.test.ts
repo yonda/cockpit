@@ -9,7 +9,7 @@ function makePR(overrides: Partial<PullRequestCard> = {}): PullRequestCard {
     title: "title",
     url: "https://github.com/owner/name/pull/1",
     repositoryNameWithOwner: "owner/name",
-    headRefName: "feature/x",
+    headBranchLabel: "feature/x",
     baseRefName: "main",
     baseIsDefaultBranch: true,
     authorLogin: "me",

@@ -23,27 +23,28 @@ export function PullRequestCard({ pr }: { pr: PullRequestCardType }) {
         aria-hidden
       />
 
-      <div className="flex items-center justify-between gap-x-3">
-        <div className="flex min-w-0 items-baseline gap-2 font-mono text-[12px] font-medium">
-          <span className="truncate text-[var(--ink-dim)]">
+      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+        {/* basis-0 で幅を要求しないので、バッジが入る限り 1 段目に並び、ブランチ名側が省略される */}
+        <div className="flex min-w-0 flex-1 basis-0 items-baseline gap-2 font-mono text-[12px] font-medium">
+          <span className="max-w-[50%] shrink-0 truncate text-[var(--ink-dim)]">
             {pr.repositoryNameWithOwner}
           </span>
           <span className="shrink-0 text-[var(--ink-muted)]">
             #{pr.number}
           </span>
           <span
-            className="flex min-w-0 shrink-[100] items-center gap-1 self-center text-[var(--ink-muted)]"
-            title={`${pr.headRefName} → ${pr.baseRefName}`}
+            className="flex min-w-0 items-center gap-1 self-center text-[var(--ink-muted)]"
+            title={`${pr.headBranchLabel} → ${pr.baseRefName}`}
           >
             <GitBranch size={11} className="shrink-0" />
             <span className="truncate">
-              {pr.headRefName}
+              {pr.headBranchLabel}
               {!pr.baseIsDefaultBranch && ` → ${pr.baseRefName}`}
             </span>
           </span>
         </div>
 
-        <div className="flex shrink-0 gap-1">
+        <div className="flex flex-wrap gap-1">
           {pr.isDraft && <Badge variant="neutral">Draft</Badge>}
           {pr.statusCheckRollup === "SUCCESS" && (
             <Badge variant="success">
