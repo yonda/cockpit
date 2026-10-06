@@ -159,8 +159,8 @@ export async function PullRequestsBoard() {
   } catch (err) {
     return <SectionErrorState error={err} />;
   }
-  const waitingTotal =
-    buckets.waiting.mine.length + buckets.waiting.review.length;
+  // レビュー依頼側は Working に寄せたので、Parked は自分の PR だけ
+  const waitingTotal = buckets.waiting.mine.length;
 
   return (
     <div className="flex flex-col gap-10">
