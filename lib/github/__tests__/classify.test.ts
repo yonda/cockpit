@@ -44,14 +44,14 @@ describe("classifyMinePR", () => {
     ).toBe("now");
   });
 
-  it("Approve 済みでも CI 実行中なら waiting のまま", () => {
+  it("Approve 済みでも CI 実行中なら soon", () => {
     expect(
       classifyMinePR(makePR({ reviewDecision: "APPROVED", statusCheckRollup: "PENDING" })),
-    ).toBe("waiting");
+    ).toBe("soon");
   });
 
-  it("レビュー待ちは waiting", () => {
-    expect(classifyMinePR(makePR())).toBe("waiting");
+  it("レビュー待ちは soon", () => {
+    expect(classifyMinePR(makePR())).toBe("soon");
   });
 });
 
@@ -74,6 +74,5 @@ describe("classify", () => {
     const pr = makePR({ id: "PR_2", viewerLatestReviewState: "APPROVED" });
     const buckets = classify([], [], [pr]);
     expect(buckets.soon.review.map((c) => c.id)).toEqual(["PR_2"]);
-    expect(buckets.waiting.review).toEqual([]);
   });
 });

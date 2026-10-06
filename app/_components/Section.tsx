@@ -5,7 +5,7 @@ import { HintTooltip } from "./HintTooltip";
 import type { PullRequestCard as PullRequestCardType } from "@/lib/github/types";
 import { groupByStack, type StackIndex } from "@/lib/github/stack";
 
-export type TierTone = "now" | "soon" | "hold";
+export type TierTone = "now" | "soon";
 
 const toneStyles: Record<
   TierTone,
@@ -24,12 +24,6 @@ const toneStyles: Record<
     dot: "bg-[var(--signal-info)]",
     rule: "bg-[var(--signal-info)]/50",
     label: "text-[var(--signal-info)]",
-  },
-  hold: {
-    marker: "text-[var(--ink-muted)]",
-    dot: "bg-[var(--ink-muted)]",
-    rule: "bg-[var(--hairline-strong)]",
-    label: "text-[var(--ink-dim)]",
   },
 };
 

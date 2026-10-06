@@ -26,7 +26,7 @@ const fetchBuckets = cache(async () => {
 });
 
 function allCards(buckets: ClassifiedBuckets) {
-  return [buckets.now, buckets.soon, buckets.waiting].flatMap((b) => [...b.mine, ...b.review]);
+  return [buckets.now, buckets.soon].flatMap((b) => [...b.mine, ...b.review]);
 }
 
 function nowSection(
@@ -61,9 +61,9 @@ function soonSection(
       tone="soon"
       label="Working"
       totalCount={soonTotal}
-      hint="your drafts · un-drafted but no reviewer assigned · review requests with ci still running · reviewed by you, not merged"
+      hint="your drafts · your PRs awaiting review · review requests with ci still running · reviewed by you, not merged"
       subgroups={[
-        { title: "yours · draft / no reviewer", cards: buckets.soon.mine },
+        { title: "yours · draft / awaiting review", cards: buckets.soon.mine },
         { title: "review requests · ci running / reviewed", cards: buckets.soon.review },
       ]}
       emptyMessage="nothing queued up"
@@ -104,7 +104,7 @@ const PR_TIER_META = {
   },
   soon: {
     subgroups: (b: Awaited<ReturnType<typeof fetchBuckets>>) => [
-      { title: "yours · draft / no reviewer", cards: b.soon.mine },
+      { title: "yours · draft / awaiting review", cards: b.soon.mine },
       { title: "review requests · ci running / reviewed", cards: b.soon.review },
     ],
     emptyMessage: "nothing queued up",
@@ -151,7 +151,7 @@ export async function PullRequestsTierCell({ tier }: { tier: "now" | "soon" }) {
   );
 }
 
-// Pull Requests タブ用: Hold まで含めた全量
+// Pull Requests タブ用: Needs You と Working の全量
 export async function PullRequestsBoard() {
   let buckets;
   try {
@@ -159,22 +159,11 @@ export async function PullRequestsBoard() {
   } catch (err) {
     return <SectionErrorState error={err} />;
   }
-  // レビュー依頼側は Working に寄せたので、Parked は自分の PR だけ
-  const waitingTotal = buckets.waiting.mine.length;
 
   return (
     <div className="flex flex-col gap-10">
       {nowSection(buckets)}
       {soonSection(buckets)}
-      <TierSection
-        tone="hold"
-        label="Parked"
-        totalCount={waitingTotal}
-        hint="awaiting reviewer"
-        subgroups={[{ title: "yours · waiting", cards: buckets.waiting.mine }]}
-        emptyMessage="nothing on hold"
-        stacks={buckets.stacks}
-      />
     </div>
   );
 }
