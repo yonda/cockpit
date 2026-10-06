@@ -47,18 +47,22 @@ export default function Dashboard() {
           </TierBand>
         </div>
 
-        <SectionBoundary title="today">
-          <div className="flex flex-col gap-6">
-            <BoardColumnHeader
-              title="Today"
-              hint="google calendar · 07:00–21:00 timeline · red line = now · click an event to join its meet"
-              hintAlign="right"
-            />
-            <Suspense fallback={<SectionSkeleton />}>
-              <TodaySchedule />
-            </Suspense>
-          </div>
-        </SectionBoundary>
+        {/* 2 列表示のときだけスクロールに追従させる。top はヘッダ (約 74px) + 余白。
+            画面より高いときは列の中でスクロールできるようにする */}
+        <div className="lg:sticky lg:top-[98px] lg:max-h-[calc(100vh-122px)] lg:self-start lg:overflow-y-auto">
+          <SectionBoundary title="today">
+            <div className="flex flex-col gap-6">
+              <BoardColumnHeader
+                title="Today"
+                hint="google calendar · 07:00–21:00 timeline · red line = now · click an event to join its meet"
+                hintAlign="right"
+              />
+              <Suspense fallback={<SectionSkeleton />}>
+                <TodaySchedule />
+              </Suspense>
+            </div>
+          </SectionBoundary>
+        </div>
       </main>
     </div>
   );
