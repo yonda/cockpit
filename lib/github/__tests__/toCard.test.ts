@@ -19,7 +19,7 @@ function makeNode(overrides: Partial<GraphQLPullRequestNode> = {}): GraphQLPullR
     baseRefName: "main",
     isCrossRepository: false,
     headRepositoryOwner: { login: "owner" },
-    repository: { nameWithOwner: "owner/name", defaultBranchRef: { name: "main" } },
+    repository: { nameWithOwner: "owner/name" },
     author: { login: "me", avatarUrl: "" },
     comments: { totalCount: 0 },
     reviewThreads: { totalCount: 0 },
@@ -32,26 +32,10 @@ function makeNode(overrides: Partial<GraphQLPullRequestNode> = {}): GraphQLPullR
 }
 
 describe("toPullRequestCard のブランチ情報", () => {
-  it("base がデフォルトブランチなら baseIsDefaultBranch は true", () => {
-    const card = toPullRequestCard(makeNode());
-    expect(card.headBranchLabel).toBe("feature/x");
-    expect(card.baseIsDefaultBranch).toBe(true);
-  });
-
-  it("stacked PR のように base がデフォルト以外なら false", () => {
+  it("head と base のブランチ名をそのまま持つ", () => {
     const card = toPullRequestCard(makeNode({ baseRefName: "feature/base" }));
+    expect(card.headBranchLabel).toBe("feature/x");
     expect(card.baseRefName).toBe("feature/base");
-    expect(card.baseIsDefaultBranch).toBe(false);
-  });
-
-  it("デフォルトブランチが取れないときは true に倒して base を出さない", () => {
-    const card = toPullRequestCard(
-      makeNode({
-        baseRefName: "develop",
-        repository: { nameWithOwner: "owner/name", defaultBranchRef: null },
-      }),
-    );
-    expect(card.baseIsDefaultBranch).toBe(true);
   });
 
   it("fork からの PR は head に owner を付ける", () => {

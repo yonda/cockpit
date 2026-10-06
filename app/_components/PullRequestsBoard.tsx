@@ -4,7 +4,8 @@ import {
   fetchReviewRequested,
   fetchReviewedByMeOpen,
 } from "@/lib/github/fetchers";
-import { classify } from "@/lib/github/classify";
+import { classify, type ClassifiedBuckets } from "@/lib/github/classify";
+import { buildStackIndex } from "@/lib/github/stack";
 import { TierSection, SubGroup } from "./Section";
 import { EmptyRow } from "./EmptyState";
 import { SectionErrorState } from "./ErrorState";
@@ -19,8 +20,14 @@ const fetchBuckets = cache(async () => {
     fetchReviewRequested(),
     fetchReviewedByMeOpen(),
   ]);
-  return classify(mine, review, reviewedByMe);
+  const buckets = classify(mine, review, reviewedByMe);
+  // stack の段数は区分をまたいで数えるので、全 PR から 1 回だけ作る
+  return { ...buckets, stacks: buildStackIndex(allCards(buckets)) };
 });
+
+function allCards(buckets: ClassifiedBuckets) {
+  return [buckets.now, buckets.soon, buckets.waiting].flatMap((b) => [...b.mine, ...b.review]);
+}
 
 function nowSection(
   buckets: Awaited<ReturnType<typeof fetchBuckets>>,
@@ -39,6 +46,7 @@ function nowSection(
       ]}
       emptyMessage="all clear · nothing to action right now"
       stackSubgroups={stackSubgroups}
+      stacks={buckets.stacks}
     />
   );
 }
@@ -60,6 +68,7 @@ function soonSection(
       ]}
       emptyMessage="nothing queued up"
       stackSubgroups={stackSubgroups}
+      stacks={buckets.stacks}
     />
   );
 }
@@ -129,7 +138,12 @@ export async function PullRequestsTierCell({ tier }: { tier: "now" | "soon" }) {
       ) : (
         <div className="flex flex-col gap-6">
           {subgroups.map((group) => (
-            <SubGroup key={group.title} title={group.title} cards={group.cards} />
+            <SubGroup
+              key={group.title}
+              title={group.title}
+              cards={group.cards}
+              stacks={buckets.stacks}
+            />
           ))}
         </div>
       )}
@@ -162,6 +176,7 @@ export async function PullRequestsBoard() {
           { title: "approved by you · not merged", cards: buckets.waiting.review },
         ]}
         emptyMessage="nothing on hold"
+        stacks={buckets.stacks}
       />
     </div>
   );

@@ -1,22 +1,29 @@
 import Image from "next/image";
-import { AlertTriangle, Check, CircleDashed, GitBranch, MessageSquare, ThumbsUp, X } from "lucide-react";
+import { AlertTriangle, Check, CircleDashed, Layers, MessageSquare, ThumbsUp, X } from "lucide-react";
 import { Badge } from "./Badge";
 import { RelativeTime } from "./RelativeTime";
 import { ReviewerRow } from "./ReviewerRow";
 import type { PullRequestCard as PullRequestCardType } from "@/lib/github/types";
+import type { StackInfo } from "@/lib/github/stack";
 
 // 1 画面に入る件数を優先し 3 段に収める:
-//   1. repo / #番号 / ブランチ と状態バッジ
+//   1. repo / #番号 / stack 内の段 と状態バッジ
 //   2. タイトル
 //   3. 作者 / 更新時刻 / 差分 とレビュアー
 // 表示する項目は減らさず、段の統合と余白の削減だけで高さを下げる。
-export function PullRequestCard({ pr }: { pr: PullRequestCardType }) {
+export function PullRequestCard({
+  pr,
+  stack,
+}: {
+  pr: PullRequestCardType;
+  stack?: StackInfo;
+}) {
   return (
     <a
       href={pr.url}
       target="_blank"
       rel="noopener noreferrer"
-      className="fadeup group relative flex flex-col gap-1.5 border border-[var(--hairline)] bg-[var(--panel)] px-3.5 py-2.5 transition hover:border-[var(--accent)]/60 hover:bg-[var(--panel-hover)]"
+      className="fadeup group relative flex min-w-0 flex-col gap-1.5 border border-[var(--hairline)] bg-[var(--panel)] px-3.5 py-2.5 transition hover:border-[var(--accent)]/60 hover:bg-[var(--panel-hover)]"
     >
       <span
         className="pointer-events-none absolute right-0 top-0 h-2.5 w-2.5 border-r border-t border-[var(--hairline-strong)] transition group-hover:border-[var(--accent)]"
@@ -24,24 +31,25 @@ export function PullRequestCard({ pr }: { pr: PullRequestCardType }) {
       />
 
       <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
-        {/* basis-0 で幅を要求しないので、バッジが入る限り 1 段目に並び、ブランチ名側が省略される */}
-        <div className="flex min-w-0 flex-1 basis-0 items-baseline gap-2 font-mono text-[12px] font-medium">
-          <span className="max-w-[50%] shrink-0 truncate text-[var(--ink-dim)]">
+        <div
+          className="flex min-w-0 items-baseline gap-2 font-mono text-[12px] font-medium"
+          title={`${pr.headBranchLabel} → ${pr.baseRefName}`}
+        >
+          <span className="truncate text-[var(--ink-dim)]">
             {pr.repositoryNameWithOwner}
           </span>
           <span className="shrink-0 text-[var(--ink-muted)]">
             #{pr.number}
           </span>
-          <span
-            className="flex min-w-0 items-center gap-1 self-center text-[var(--ink-muted)]"
-            title={`${pr.headBranchLabel} → ${pr.baseRefName}`}
-          >
-            <GitBranch size={11} className="shrink-0" />
-            <span className="truncate">
-              {pr.headBranchLabel}
-              {!pr.baseIsDefaultBranch && ` → ${pr.baseRefName}`}
+          {stack ? (
+            <span className="flex shrink-0 items-center gap-1 self-center text-[var(--accent)]">
+              <Layers size={11} />
+              {stack.position}/{stack.size}
+              <span className="text-[var(--ink-muted)]">
+                {stack.parentNumber === null ? "base" : `on #${stack.parentNumber}`}
+              </span>
             </span>
-          </span>
+          ) : null}
         </div>
 
         <div className="flex flex-wrap gap-1">
