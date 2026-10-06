@@ -19,7 +19,7 @@ export default function Dashboard() {
           <TierBand
             tone="now"
             label="Needs You"
-            hint="agents: blocked on your reply · done unreviewed / prs: changes-requested · ci-failed · conflict · unreviewed request"
+            hint="agents: blocked on your reply · done unreviewed / prs: changes-requested · ci-failed · conflict · approved, ready to merge · unreviewed request"
           >
             <SectionBoundary title="agents">
               <AgentsTierCell tier="needsYou" />
