@@ -20,6 +20,8 @@ export function classifyMinePR(pr: PullRequestCard): Tier {
     if (pr.statusCheckRollup === "SUCCESS") return "now";
     return "soon";
   }
+  // Approve 済みで CI も終わっている = あとは自分がマージするだけ
+  if (pr.reviewDecision === "APPROVED" && pr.statusCheckRollup !== "PENDING") return "now";
   // Draft を解除したのにレビュアー未アサイン (リクエストもレビューもゼロ) =
   // まだボールは自分側にあるので Parked にしない
   if (pr.reviewers.length === 0) return "soon";

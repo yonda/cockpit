@@ -32,7 +32,7 @@ function nowSection(
       tone="now"
       label="Needs You"
       totalCount={nowTotal}
-      hint="changes-requested · ci-failed · conflict · draft with green ci · unreviewed request"
+      hint="changes-requested · ci-failed · conflict · draft with green ci · approved, ready to merge · unreviewed request"
       subgroups={[
         { title: "yours · needs work", cards: buckets.now.mine },
         { title: "review requests · open", cards: buckets.now.review },
