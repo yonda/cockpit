@@ -155,10 +155,7 @@ export function toPullRequestCard(node: GraphQLPullRequestNode): PullRequestCard
         ? `${node.headRepositoryOwner.login}:${node.headRefName}`
         : node.headRefName,
     baseRefName: node.baseRefName,
-    // デフォルトブランチが分からないときは省略側に倒す
-    baseIsDefaultBranch:
-      node.repository.defaultBranchRef === null ||
-      node.baseRefName === node.repository.defaultBranchRef.name,
+    defaultBranchName: node.repository.defaultBranchRef?.name ?? null,
     authorLogin: node.author?.login ?? "ghost",
     authorAvatarUrl: node.author?.avatarUrl ?? "",
     isDraft: node.isDraft,

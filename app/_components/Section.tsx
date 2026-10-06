@@ -3,6 +3,7 @@ import { PullRequestCard } from "./PullRequestCard";
 import { EmptyState, EmptyRow } from "./EmptyState";
 import { HintTooltip } from "./HintTooltip";
 import type { PullRequestCard as PullRequestCardType } from "@/lib/github/types";
+import { groupByStack, type StackIndex } from "@/lib/github/stack";
 
 export type TierTone = "now" | "soon" | "hold";
 
@@ -77,6 +78,7 @@ export type TierSectionProps = {
   emptyMessage: string;
   // 狭いカラム内に置くとき subgroup を横並びにせず縦に積む
   stackSubgroups?: boolean;
+  stacks: StackIndex;
 };
 
 export function TierSection({
@@ -87,6 +89,7 @@ export function TierSection({
   subgroups,
   emptyMessage,
   stackSubgroups = false,
+  stacks,
 }: TierSectionProps) {
   return (
     <section className="flex flex-col gap-5">
@@ -108,7 +111,12 @@ export function TierSection({
           }
         >
           {subgroups.map((group) => (
-            <SubGroup key={group.title} title={group.title} cards={group.cards} />
+            <SubGroup
+              key={group.title}
+              title={group.title}
+              cards={group.cards}
+              stacks={stacks}
+            />
           ))}
         </div>
       )}
@@ -119,9 +127,11 @@ export function TierSection({
 export function SubGroup({
   title,
   cards,
+  stacks,
 }: {
   title: string;
   cards: PullRequestCardType[];
+  stacks: StackIndex;
 }) {
   return (
     <div className="flex flex-col gap-2">
@@ -137,9 +147,21 @@ export function SubGroup({
         </div>
       ) : (
         <div className="flex flex-col gap-2">
-          {cards.map((pr) => (
-            <PullRequestCard key={pr.id} pr={pr} />
-          ))}
+          {groupByStack(cards, stacks).map((group) =>
+            group.kind === "single" ? (
+              <PullRequestCard key={group.card.id} pr={group.card} />
+            ) : (
+              // 同じ stack はベースから順に並べ、左の線でつなぐ
+              <div
+                key={group.rootId}
+                className="flex flex-col gap-1 border-l-2 border-[var(--accent)]/50 pl-2"
+              >
+                {group.cards.map((pr) => (
+                  <PullRequestCard key={pr.id} pr={pr} stack={stacks.get(pr.id)} />
+                ))}
+              </div>
+            ),
+          )}
         </div>
       )}
     </div>

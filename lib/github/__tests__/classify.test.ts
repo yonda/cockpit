@@ -11,7 +11,7 @@ function makePR(overrides: Partial<PullRequestCard> = {}): PullRequestCard {
     repositoryNameWithOwner: "owner/name",
     headBranchLabel: "feature/x",
     baseRefName: "main",
-    baseIsDefaultBranch: true,
+    defaultBranchName: "main",
     authorLogin: "me",
     authorAvatarUrl: "",
     isDraft: false,
