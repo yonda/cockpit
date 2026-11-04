@@ -110,13 +110,13 @@ export function PaneCard({
   const displayCwd = pane.foregroundCwd ?? pane.cwd;
   const cwdLabel = displayCwd.split("/").slice(-2).join("/");
   const recap = pane.recap;
-  const { focus: openInWezTerm, pending: focusPending } = useFocusPane(pane);
+  const { focus: openInHerdr, pending: focusPending } = useFocusPane(pane);
 
   return (
     <button
       type="button"
-      onClick={openInWezTerm}
-      title="WezTerm でこの workspace を開く"
+      onClick={openInHerdr}
+      title="Herdr でこの workspace を開く"
       className={`flex flex-col gap-2 border px-3 py-2.5 text-left transition hover:border-[var(--accent)]/60 ${
         focusPending ? "opacity-60" : ""
       } ${
