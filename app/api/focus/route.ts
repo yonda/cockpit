@@ -9,8 +9,10 @@ export const runtime = "nodejs";
 
 const execFileAsync = promisify(execFile);
 
+const HERDR_UI_BUNDLE_ID = "so.pen.herdr-gpui";
+
 // ブラウザとサーバーが同じ Mac にいる前提の機能:
-// herdr の workspace/tab をフォーカスし、WezTerm を前面に出す。
+// herdr の workspace/tab をフォーカスし、Herdr UI を前面に出す。
 export async function POST(request: Request) {
   if (!isSameOriginRequest(request)) {
     return NextResponse.json(
@@ -52,7 +54,7 @@ export async function POST(request: Request) {
 
   try {
     await focusHerdrTarget(workspaceId, tabId, paneId);
-    await execFileAsync("open", ["-a", "WezTerm"]);
+    await execFileAsync("open", ["-b", HERDR_UI_BUNDLE_ID]);
     console.log(
       `[focus] ok workspace=${workspaceId} tab=${tabId ?? "-"} pane=${paneId ?? "-"}`,
     );
